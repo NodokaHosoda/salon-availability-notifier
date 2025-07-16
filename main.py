@@ -1,28 +1,34 @@
 from urllib.parse import urlparse, parse_qs
-import time, os, asyncio, re
+import os, asyncio, re, json, requests
 from datetime import datetime
 from playwright.async_api import async_playwright
 
-
 LINE_TOKEN = os.environ.get("LINE_TOKEN")
-URL = "https://beauty.hotpepper.jp/slnH000440848/"
+USER_ID = os.environ.get("USER_ID")
+URL = os.environ.get("TASK_URL")
+REQUEST_DATE = os.environ.get("REQUEST_DATE")
 
-"""
-TODO: LINE通知の実装
-def send_line_notify(message):
-    if not LINE_TOKEN:
-        print("LINE_TOKEN is missing")
-        return
-    requests.post(
-        "https://notify-api.line.me/api/notify",
-        headers={"Authorization": f"Bearer {LINE_TOKEN}"},
-        data={"message": message}
-    )
-"""
+def send_line_message(message):
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_TOKEN}"
+    }
+    body = {
+        "to": USER_ID,
+        "messages": [
+            {
+                "type": "text",
+                "text": message
+            }
+        ]
+    }
+    response = requests.post(url, headers=headers, data=json.dumps(body))
+    print("Status:", response.status_code)
+    print("Response:", response.text)
 
 async def check_availability():
-    date = "20250814"
-    request_date = datetime.strptime(date, "%Y%m%d")
+    request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
     availability_elements = []
 
     async with async_playwright() as p:
@@ -70,6 +76,7 @@ async def check_availability():
         count = len(availability_elements)
         if count > 0:
             data = await create_avaliable_date_list(availability_elements, request_date)
+            send_line_message(data)
             print(data)
         else:
             print("No available dates found.")
@@ -77,7 +84,7 @@ async def check_availability():
         await browser.close()
 
 async def create_avaliable_date_list(elements, request_date: datetime):
-    text = ""
+    text = "空きがあります！\n"
     for ele in elements:
         url = await ele.get_attribute("href")
         parsed_url = urlparse(url)
