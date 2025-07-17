@@ -91,9 +91,13 @@ async def create_avaliable_date_list(elements, request_date: datetime):
     text = "空きがあります！\n"
     for ele in elements:
         url = await ele.get_attribute("href")
+        print(f'url{url}')
         parsed_url = urlparse(url)
+        print(f'parsed_url{parsed_url}')
         params = parse_qs(parsed_url.query)
+        print(f'params{params}')
         date = params.get("rsvRequestDate1", [""])[0]
+        print(f'date{date}')
 
         if datetime.strptime(date, "%Y%m%d") <= request_date:
             time = params.get("rsvRequestTime1", [""])[0]
