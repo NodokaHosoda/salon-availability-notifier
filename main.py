@@ -74,6 +74,8 @@ async def check_availability():
                 break
 
         count = len(availability_elements)
+        print(f'count{count}')
+        print(f'list{availability_elements}')
         if count > 0:
             data = await create_avaliable_date_list(availability_elements, request_date)
             send_line_message(data)
