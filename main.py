@@ -61,7 +61,8 @@ async def check_availability():
             last_date_obj = await last_date_tr.locator("th:last-of-type").text_content()
             last_date = convert_to_ymd(last_date_obj)
             # カレンダーの空きを検出
-            await page.wait_for_selector("a.icnOpen", timeout=10000)
+            await page.screenshot(path="debug.png")
+            print(await page.content())
             availability_elements += await calendar.locator("a.icnOpen").all()
 
             if last_date < request_date:
