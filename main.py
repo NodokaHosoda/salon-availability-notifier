@@ -93,7 +93,6 @@ async def create_avaliable_date_list(elements, request_date: datetime):
         url = await ele.get_attribute("href")
         print(f'url{url}')
         parsed_url = urlparse(url)
-        print(f'parsed_url{parsed_url}')
         params = parse_qs(parsed_url.query)
         print(f'params{params}')
         date = params.get("rsvRequestDate1", [""])[0]
