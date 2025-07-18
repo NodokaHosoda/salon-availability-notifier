@@ -80,15 +80,18 @@ async def check_availability():
         print(f'list{availability_elements}')
         if count > 0:
             data = await create_avaliable_date_list(availability_elements, request_date)
-            send_line_message(data)
-            print(data)
+            if data:
+                send_line_message("空きがあります！\n"+ data)
+                print(data)
+            else:
+                print("No available dates found.")
         else:
             print("No available dates found.")
 
         await browser.close()
 
 async def create_avaliable_date_list(elements, request_date: datetime):
-    text = "空きがあります！\n"
+    text = ""
     for ele in elements:
         url = await ele.get_attribute("href")
         print(f'url{url}')
