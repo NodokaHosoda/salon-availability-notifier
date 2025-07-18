@@ -100,12 +100,14 @@ async def create_avaliable_date_list(elements, request_date: datetime):
         print(f'params{params}')
         date = params.get("rsvRequestDate1", [""])[0]
         print(f'date{date}')
+        print(request_date)
 
         if datetime.strptime(date, "%Y%m%d") <= request_date:
             time = params.get("rsvRequestTime1", [""])[0]
             date = format_date(date)
             time = format_time(time)
             text += f"{date} {time}\n"
+            print(text)
     return text
 
 def format_date(date_str: str):
