@@ -25,7 +25,6 @@ def send_line_message(message):
     }
     response = requests.post(url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
-    print("Response:", response.text)
 
 async def check_availability():
     request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
