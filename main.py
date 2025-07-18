@@ -25,6 +25,7 @@ def send_line_message(message):
     }
     response = requests.post(url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
+    print(response.json())
 
 async def check_availability():
     request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
@@ -61,7 +62,6 @@ async def check_availability():
             last_date = convert_to_ymd(last_date_obj)
             # カレンダーの空きを検出
             await page.screenshot(path="debug.png")
-            print(await page.content())
             availability_elements += await calendar.locator("a.icnOpen").all()
 
             if last_date < request_date:
@@ -78,7 +78,7 @@ async def check_availability():
         print(f'count{count}')
         print(f'list{availability_elements}')
         if count > 0:
-            data = await create_avaliable_date_list(availability_elements, request_date)
+            data = await create_avaliable_date_list(availability_elements)
             if data:
                 send_line_message("空きがあります！\n"+ data)
                 print(data)
@@ -89,7 +89,7 @@ async def check_availability():
 
         await browser.close()
 
-async def create_avaliable_date_list(elements, request_date: datetime):
+async def create_avaliable_date_list(elements):
     text = ""
     for ele in elements:
         url = await ele.get_attribute("href")
@@ -101,7 +101,7 @@ async def create_avaliable_date_list(elements, request_date: datetime):
         print(f'date{date}')
         print(request_date)
 
-        if datetime.strptime(date, "%Y%m%d") <= request_date:
+        if date <= REQUEST_DATE:
             time = params.get("rsvRequestTime1", [""])[0]
             date = format_date(date)
             time = format_time(time)
