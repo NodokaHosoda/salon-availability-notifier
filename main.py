@@ -99,7 +99,6 @@ async def create_avaliable_date_list(elements):
         print(f'params{params}')
         date = params.get("rsvRequestDate1", [""])[0]
         print(f'date{date}')
-        print(request_date)
 
         if date <= REQUEST_DATE:
             time = params.get("rsvRequestTime1", [""])[0]
