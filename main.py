@@ -8,6 +8,12 @@ USER_ID = os.environ.get("USER_ID")
 URL = os.environ.get("TASK_URL")
 REQUEST_DATE = os.environ.get("REQUEST_DATE")
 
+#テスト用　絶対コミットしないこと
+LINE_TOKEN = "test"
+URL = "https://beauty.hotpepper.jp/slnH000440848/"
+REQUEST_DATE = "20250814"
+USER_ID = "REMOVED"
+
 def send_line_message(message):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
