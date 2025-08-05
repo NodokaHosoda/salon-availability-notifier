@@ -31,7 +31,7 @@ def send_line_message(message):
     }
     response = requests.post(url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
-    print("Response:", response.text)
+    print(response.json())
 
 async def check_availability():
     request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
@@ -67,6 +67,7 @@ async def check_availability():
             last_date_obj = await last_date_tr.locator("th:last-of-type").text_content()
             last_date = convert_to_ymd(last_date_obj)
             # カレンダーの空きを検出
+            await page.screenshot(path="debug.png")
             availability_elements += await calendar.locator("a.icnOpen").all()
 
             if last_date < request_date:
@@ -80,28 +81,37 @@ async def check_availability():
                 break
 
         count = len(availability_elements)
+        print(f'count{count}')
+        print(f'list{availability_elements}')
         if count > 0:
-            data = await create_avaliable_date_list(availability_elements, request_date)
-            send_line_message(data)
-            print(data)
+            data = await create_avaliable_date_list(availability_elements)
+            if data:
+                send_line_message("空きがあります！\n"+ data)
+                print(data)
+            else:
+                print("No available dates found.")
         else:
             print("No available dates found.")
 
         await browser.close()
 
-async def create_avaliable_date_list(elements, request_date: datetime):
-    text = "空きがあります！\n"
+async def create_avaliable_date_list(elements):
+    text = ""
     for ele in elements:
         url = await ele.get_attribute("href")
+        print(f'url{url}')
         parsed_url = urlparse(url)
         params = parse_qs(parsed_url.query)
+        print(f'params{params}')
         date = params.get("rsvRequestDate1", [""])[0]
+        print(f'date{date}')
 
-        if datetime.strptime(date, "%Y%m%d") <= request_date:
+        if date <= REQUEST_DATE:
             time = params.get("rsvRequestTime1", [""])[0]
             date = format_date(date)
             time = format_time(time)
             text += f"{date} {time}\n"
+            print(text)
     return text
 
 def format_date(date_str: str):
