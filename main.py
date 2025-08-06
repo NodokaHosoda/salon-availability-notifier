@@ -111,7 +111,6 @@ async def create_avaliable_date_list(elements):
             date = format_date(date)
             time = format_time(time)
             text += f"{date} {time}\n"
-            print(text)
     return text
 
 def format_date(date_str: str):
