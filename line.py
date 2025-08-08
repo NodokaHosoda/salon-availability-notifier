@@ -1,7 +1,4 @@
 
-#テスト用　絶対コミットしないこと
-LINE_TOKEN = "ZcqqXe0w0pg75HCzCGfkJx3QYsOLebMQ5WUIWNHf1Ir0MuxUoVqYdE4RvwnuTlZVspE+pF3/aXkeBwUlIvtohGxdzslHXvnabYb+tJxd8PjizbYrNeqLpRCscxAEIQ/MSCC8sTL6VYKvbvymPeflBAdB04t89/1O/w1cDnyilFU="
-USER_ID = "U69f07b1dcbe735e25996a8d9a06ac33e"
 
 def send_line_message(message):
     url = "https://api.line.me/v2/bot/message/push"
