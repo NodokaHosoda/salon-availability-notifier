@@ -1,7 +1,11 @@
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import (
+    MessageEvent, TextMessage,
+    TemplateSendMessage, ButtonsTemplate,
+    DatePickerAction, MessageAction
+)
 import os
 
 app = Flask(__name__)
@@ -29,10 +33,35 @@ def callback():
 # メッセージ受信イベント
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    reply_text = f"あなたが送ったメッセージ: {event.message.text}"
+    interact_message = create_interact_message()
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text=reply_text)
+        interact_message
+    )
+
+def create_interact_message():
+    buttons_template = ButtonsTemplate(
+        title="Menu",
+        text="空き情報の通知設定",
+        actions=[
+            DatePickerAction(
+                label="date",
+                data="action=date",
+                mode="date"
+            ),
+            MessageAction(
+                label="start",
+                text="上記の日付以前の空き情報の通知を受け取る"
+            ),
+            MessageAction(
+                label="stop",
+                text="通知を止める"
+            )
+        ]
+    )
+    return TemplateSendMessage(
+        alt_text="This is a buttons template",
+        template=buttons_template
     )
 
 @app.route("/")
