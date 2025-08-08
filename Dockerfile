@@ -10,4 +10,4 @@ RUN pip install --upgrade pip \
 
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+CMD ["gunicorn", "--bind", ":8080", "main:app"]

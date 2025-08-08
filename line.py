@@ -1,7 +1,4 @@
 
-#テスト用　絶対コミットしないこと
-LINE_TOKEN = "test"
-USER_ID = "REMOVED"
 
 def send_line_message(message):
     url = "https://api.line.me/v2/bot/message/push"
