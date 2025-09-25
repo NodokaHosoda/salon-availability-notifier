@@ -1,9 +1,9 @@
 name: Scheduled Playwright Run
 
 on:
-  schedule:
+  #schedule:
     # 毎日、日本時間の8時から22時までの毎時0分に実行（JSTはUTC+9なので、UTCでは23時から13時まで）
-    - cron: '0 23,0-13 * * *'
+    #- cron: '0 23,0-13 * * *'
   workflow_dispatch: 
   
 jobs:
