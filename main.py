@@ -3,7 +3,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage,
-    TemplateSendMessage, ButtonsTemplate,
+    TemplateSendMessage, TextSendMessage, ButtonsTemplate,
     DatePickerAction, MessageAction
 )
 import os
@@ -33,36 +33,100 @@ def callback():
 # メッセージ受信イベント
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    interact_message = create_interact_message()
-    line_bot_api.reply_message(
-        event.reply_token,
-        interact_message
-    )
+    received_text = event.message.text
 
-def create_interact_message():
-    buttons_template = ButtonsTemplate(
-        title="Menu",
-        text="空き情報の通知設定",
-        actions=[
-            DatePickerAction(
-                label="date",
-                data="action=date",
-                mode="date"
-            ),
-            MessageAction(
-                label="start",
-                text="上記の日付以前の空き情報の通知を受け取る"
-            ),
-            MessageAction(
-                label="stop",
-                text="通知を止める"
-            )
-        ]
-    )
-    return TemplateSendMessage(
-        alt_text="This is a buttons template",
-        template=buttons_template
-    )
+    if received_text == "通知開始":
+        reply_msg = TemplateSendMessage(
+            alt_text=start_notification["altText"],
+            template=start_notification["template"]
+        )
+    elif received_text == "通知停止":
+        reply_msg = TemplateSendMessage(
+            alt_text=stop_notification["altText"],
+            template=stop_notification["template"]
+        )
+    elif received_text == "日付変更":
+        reply_msg = TemplateSendMessage(
+            alt_text=modify_date["altText"],
+            template=modify_date["template"]
+        )
+    else:
+        reply_msg = TextSendMessage(
+            text="「通知開始」「通知停止」「日付変更」のいずれかを送信してください。"
+        )
+    line_bot_api.reply_message(event.reply_token, reply_msg)
+
+
+modify_date = {
+  "type": "template",
+  "altText": "This is a buttons template",
+  "template": {
+    "type": "buttons",
+    "title": "Menu",
+    "text": "Please select",
+    "actions": [
+      {
+        "type": "datetimepicker",
+        "label": "Select date",
+        "data": "storeId=12345",
+        "mode": "date"
+      },
+      {
+        "type": "postback",
+        "label": "Buy",
+        "data": "action=modify_date"
+      }
+    ]
+  }
+}
+
+stop_notification = {
+  "type": "template",
+  "altText": "this is a confirm template",
+  "template": {
+    "type": "confirm",
+    "text": "通知を止めますか？",
+    "actions": [
+      {
+        "type": "message",
+        "label": "Yes",
+        "text": "はい"
+      },
+      {
+        "type": "message",
+        "label": "No",
+        "text": "いいえ"
+      }
+    ]
+  }
+}
+
+start_notification = {
+  "type": "template",
+  "altText": "this is a confirm template",
+  "template": {
+    "type": "buttons",
+    "text": "通知を止めますか？",
+    "actions": [
+      {
+        "type": "datetimepicker",
+        "label": "Select date",
+        "data": "action=start",
+        "mode": "date"
+      },
+      {
+        "type": "message",
+        "label": "Yes",
+        "text": "はい"
+      },
+      {
+        "type": "message",
+        "label": "No",
+        "text": "いいえ"
+      }
+    ]
+  }
+}
 
 @app.route("/")
 def index():
