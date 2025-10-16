@@ -4,7 +4,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage,
-    TemplateSendMessage, TextSendMessage
+    TemplateSendMessage, TextSendMessage, PostbackEvent
 )
 import os
 
@@ -24,6 +24,27 @@ def index():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
+
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    action = event.postback.data
+    selected_date = event.postback.params.get("date") 
+    if action == "start":
+        reply_text = create_start_msg(selected_date)
+    elif action == "modify":
+        reply_text = create_modify_msg(selected_date)
+    elif action == "stop":
+        reply_text = "通知を停止しました"
+    elif "confirm_start" in action:
+        reply_text = "{selected_data}までの空き情報の通知を開始しました"
+    elif "confirm_modify" in action:
+        reply_text = "日付を{selected_data}に変更しました"
+
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=reply_text)
+    )
 
 # Webhook受信用
 @app.route("/callback", methods=['POST'])
@@ -50,8 +71,8 @@ def handle_message(event):
         )
     elif received_text == "通知停止":
         reply_msg = TemplateSendMessage(
-            alt_text=modify_date["altText"],
-            template=modify_date["template"]
+            alt_text=stop_notification["altText"],
+            template=stop_notification["template"]
         )
     elif received_text == "日付変更":
         reply_msg = TemplateSendMessage(
@@ -83,29 +104,8 @@ set_notification_date = {
       {
         "type": "datetimepicker",
         "label": "日付を選択",
-        "data": "action=start",
+        "data": "start",
         "mode": "date"
-      }
-    ]
-  }
-}
-
-start_notification = {
-  "type": "template",
-  "altText": "上記の日付までの空き情報の通知を開始しますか？",
-  "template": {
-    "type": "confirm",
-    "text": "上記の日付までの空き情報の通知を開始しますか？",
-    "actions": [
-      {
-        "type": "message",
-        "label": "はい",
-        "text": "はい"
-      },
-      {
-        "type": "message",
-        "label": "いいえ",
-        "text": "いいえ"
       }
     ]
   }
@@ -122,29 +122,8 @@ modify_date = {
       {
         "type": "datetimepicker",
         "label": "日付を選択",
-        "data": "action=modify",
+        "data": "modify",
         "mode": "date"
-      }
-    ]
-  }
-}
-
-confirm_modified_date = {
-  "type": "template",
-  "altText": "以上の日付に変更しますか？",
-  "template": {
-    "type": "confirm",
-    "text": "以上の日付に変更しますか？",
-    "actions": [
-      {
-        "type": "message",
-        "label": "はい",
-        "text": "はい"
-      },
-      {
-        "type": "message",
-        "label": "いいえ",
-        "text": "いいえ"
       }
     ]
   }
@@ -158,9 +137,10 @@ stop_notification = {
     "text": "通知を止めますか？",
     "actions": [
       {
-        "type": "message",
+        "type": "postback",
         "label": "はい",
-        "text": "はい"
+        "text": "はい",
+        "data": "stop"
       },
       {
         "type": "message",
@@ -170,3 +150,51 @@ stop_notification = {
     ]
   }
 }
+
+def create_modify_msg(selected_date):
+  confirm_modified_date = {
+    "type": "template",
+    "altText": f"日付を{selected_date}に変更しますか？",
+    "template": {
+      "type": "confirm",
+      "text": f"日付を{selected_date}に変更しますか？",
+      "actions": [
+        {
+          "type": "postback",
+          "label": "はい",
+          "text": "はい",
+          "data": "action=confirm_modify&date={selected_date}"
+        },
+        {
+          "type": "message",
+          "label": "いいえ",
+          "text": "いいえ"
+        }
+      ]
+    }
+  }
+  return confirm_modified_date
+
+def create_start_msg(selected_date):
+  start_notification = {
+    "type": "template",
+    "altText": f"{selected_date}までの空き情報の通知を開始しますか？",
+    "template": {
+      "type": "confirm",
+      "text": f"{selected_date}までの空き情報の通知を開始しますか？",
+      "actions": [
+        {
+          "type": "postback",
+          "label": "はい",
+          "text": "はい",
+          "data": "action=confirm_start&date={selected_date}"
+        },
+        {
+          "type": "message",
+          "label": "いいえ",
+          "text": "いいえ"
+        }
+      ]
+    }
+  }
+  return start_notification
