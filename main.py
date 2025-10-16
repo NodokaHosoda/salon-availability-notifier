@@ -29,23 +29,31 @@ if __name__ == "__main__":
 @handler.add(PostbackEvent)
 def handle_postback(event):
     action = event.postback.data
-    selected_date = event.postback.params.get("date") 
+    selected_date = event.postback.params.get("date") if event.postback.params else None
+    print(f"Postback action: {action}, selected_date: {selected_date}")
+
     if action == "start":
-        reply_text = create_start_msg(selected_date)
+        data = create_start_msg(selected_date)
+        reply_msg = TemplateSendMessage(
+            alt_text=data["altText"],
+            template=data["template"]
+        )
     elif action == "modify":
-        reply_text = create_modify_msg(selected_date)
+        data = create_modify_msg(selected_date)
+        reply_msg = TemplateSendMessage(
+            alt_text=data["altText"],
+            template=data["template"]
+        )
     elif action == "stop":
-        reply_text = "通知を停止しました"
+        reply_msg = TextSendMessage(text="通知を停止しました")
     elif "confirm_start" in action:
-        reply_text = "{selected_data}までの空き情報の通知を開始しました"
+        reply_msg = TextSendMessage(text=f"{selected_date}までの空き情報の通知を開始しました")
     elif "confirm_modify" in action:
-        reply_text = "日付を{selected_data}に変更しました"
+        reply_msg = TextSendMessage(text=f"日付を{selected_date}に変更しました")
 
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply_text)
-    )
+    line_bot_api.reply_message(event.reply_token, reply_msg)
 
+'''
 # Webhook受信用
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -58,6 +66,7 @@ def callback():
         abort(400)
 
     return 'OK'
+'''
 
 # メッセージ受信イベント
 @handler.add(MessageEvent, message=TextMessage)
