@@ -25,35 +25,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-
-@handler.add(PostbackEvent)
-def handle_postback(event):
-    action = event.postback.data
-    selected_date = event.postback.params.get("date") if event.postback.params else None
-    print(f"Postback action: {action}, selected_date: {selected_date}")
-
-    if action == "start":
-        data = create_start_msg(selected_date)
-        reply_msg = TemplateSendMessage(
-            alt_text=data["altText"],
-            template=data["template"]
-        )
-    elif action == "modify":
-        data = create_modify_msg(selected_date)
-        reply_msg = TemplateSendMessage(
-            alt_text=data["altText"],
-            template=data["template"]
-        )
-    elif action == "stop":
-        reply_msg = TextSendMessage(text="通知を停止しました")
-    elif "confirm_start" in action:
-        reply_msg = TextSendMessage(text=f"{selected_date}までの空き情報の通知を開始しました")
-    elif "confirm_modify" in action:
-        reply_msg = TextSendMessage(text=f"日付を{selected_date}に変更しました")
-
-    line_bot_api.reply_message(event.reply_token, reply_msg)
-
-'''
 # Webhook受信用
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -66,7 +37,6 @@ def callback():
         abort(400)
 
     return 'OK'
-'''
 
 # メッセージ受信イベント
 @handler.add(MessageEvent, message=TextMessage)
@@ -96,6 +66,34 @@ def handle_message(event):
             reply_msg = TextSendMessage(
                 text="「通知開始」「通知停止」「日付変更」のいずれかを送信してください。"
             )
+    line_bot_api.reply_message(event.reply_token, reply_msg)
+
+
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    action = event.postback.data
+    selected_date = event.postback.params.get("date") if event.postback.params else None
+    print(f"Postback action: {action}, selected_date: {selected_date}")
+
+    if action == "start":
+        data = create_start_msg(selected_date)
+        reply_msg = TemplateSendMessage(
+            alt_text=data["altText"],
+            template=data["template"]
+        )
+    elif action == "modify":
+        data = create_modify_msg(selected_date)
+        reply_msg = TemplateSendMessage(
+            alt_text=data["altText"],
+            template=data["template"]
+        )
+    elif action == "stop":
+        reply_msg = TextSendMessage(text="通知を停止しました")
+    elif "confirm_start" in action:
+        reply_msg = TextSendMessage(text=f"{selected_date}までの空き情報の通知を開始しました")
+    elif "confirm_modify" in action:
+        reply_msg = TextSendMessage(text=f"日付を{selected_date}に変更しました")
+
     line_bot_api.reply_message(event.reply_token, reply_msg)
 
 
