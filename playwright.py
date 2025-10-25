@@ -2,21 +2,29 @@ from urllib.parse import urlparse, parse_qs
 import os, asyncio, re, json, requests
 from datetime import datetime
 from playwright.async_api import async_playwright
+from supabase import create_client
 
 LINE_TOKEN = os.environ.get("LINE_TOKEN")
-USER_ID = os.environ.get("USER_ID")
 URL = os.environ.get("TASK_URL")
-REQUEST_DATE = os.environ.get("REQUEST_DATE")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def send_line_message(request_date, user_id, exception_dates=None):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    message = loop.run_until_complete(check_availability(request_date, exception_dates))
+    loop.close()
+    if not message:
+        return
 
-def send_line_message(message):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {LINE_TOKEN}"
     }
     body = {
-        "to": USER_ID,
+        "to": user_id,
         "messages": [
             {
                 "type": "text",
@@ -28,13 +36,14 @@ def send_line_message(message):
     print("Status:", response.status_code)
     print(response.json())
 
-async def check_availability():
-    request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
+async def check_availability(request_date, exception_dates=None):
+    #request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
     availability_elements = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = await browser.new_page()
+        context = await browser.new_context()
+        page = await context.new_page()
         await page.goto(URL, wait_until="domcontentloaded")
 
         # メニューを選択画面へ
@@ -81,14 +90,11 @@ async def check_availability():
         if count > 0:
             data = await create_avaliable_date_list(availability_elements)
             if data:
-                send_line_message("空きがあります！\n"+ data)
                 print(data)
-            else:
-                print("No available dates found.")
-        else:
-            print("No available dates found.")
-
+                return "空きがあります！\n"+ data
+        print("No available dates found.")
         await browser.close()
+        return False
 
 async def create_avaliable_date_list(elements):
     text = ""
@@ -101,7 +107,7 @@ async def create_avaliable_date_list(elements):
         date = params.get("rsvRequestDate1", [""])[0]
         print(f'date{date}')
 
-        if date <= REQUEST_DATE:
+        if date <= request_date:
             time = params.get("rsvRequestTime1", [""])[0]
             date = format_date(date)
             time = format_time(time)
@@ -125,4 +131,13 @@ def convert_to_ymd(date_str: str) -> datetime:
     return datetime.strptime(cleaned.strip(), "%a %b %d %H:%M:%S JST %Y")
 
 if __name__ == "__main__":
-    asyncio.run(check_availability())
+    response = supabase.table("notification_setting") \
+        .select("last_date, get_notification, users_info(line_user_id), exceptions_date(date)") \
+        .eq("get_notification", True) \
+        .execute()
+
+    for row in response.data:
+        user_id = row["users_info"]["line_user_id"]
+        request_date = row["last_date"]
+        exception_dates = [d["date"] for d in row.get("exceptions_date", [])]
+        send_line_message(request_date, user_id, exception_dates)
