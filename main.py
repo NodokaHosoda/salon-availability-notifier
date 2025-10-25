@@ -1,3 +1,4 @@
+from urllib.parse import parse_qs
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -111,7 +112,19 @@ def handle_message(event):
 @handler.add(PostbackEvent)
 def handle_postback(event):
     action = event.postback.data
-    selected_date = event.postback.params.get("date") if event.postback.params else None
+    selected_date = None
+
+    # datetimepickerのときだけparamsに含まれる
+    if event.postback.params:
+        selected_date = event.postback.params.get("date")
+
+    # confirm_xxx の場合は data 内に入っているのでパースする
+    data_dict = parse_qs(event.postback.data)
+    if "date" in data_dict:
+        selected_date = data_dict["date"][0]
+    if "action" in data_dict:
+        action = data_dict["action"][0]
+        
     user_id = get_user_id(event)
 
     if action == "start":
@@ -194,7 +207,7 @@ def get_user_id(event):
 # 定型メッセージ
 set_notification_date = {
   "type": "template",
-  "altText": "何日まで空き情報を確認したいか、日付を選択し「送信」を押してください。",
+  "altText": "何日までの空き情報を確認したいか、日付を選択し「送信」を押してください。",
   "template": {
     "type": "buttons",
     "title": "通知開始：日付選択",
