@@ -3,3 +3,4 @@ requests
 flask
 gunicorn
 line-bot-sdk
+supabase>=1.0.0
