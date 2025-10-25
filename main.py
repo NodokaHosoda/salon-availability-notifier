@@ -187,7 +187,7 @@ def get_registered_date(user_id):
   return message
 
 def get_user_id(event):
-    line_user_id = event.source.userId
+    line_user_id = event.source.user_id
     res = supabase.table("user_info").select("id").eq("line_user_id", line_user_id).single().execute()
     return res.data['id']
 
