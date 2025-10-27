@@ -145,7 +145,7 @@ def handle_postback(event):
         )
     elif action == "stop":
         supabase.table("notification_setting") \
-            .update({"get_notification": False},{"last_date": None}) \
+            .update({"get_notification": False, "last_date": None}) \
             .eq("user_id", user_id) \
             .execute()
         # 除外日時を削除
