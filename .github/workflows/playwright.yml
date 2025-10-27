@@ -26,7 +26,7 @@ jobs:
           python -m playwright install
 
       - name: Run Playwright script
-        run: python main.py
+        run: python scraper.py
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           TASK_URL: ${{ vars.TASK_URL }}
