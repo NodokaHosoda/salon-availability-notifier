@@ -101,6 +101,10 @@ def handle_message(event):
             template=modify_date["template"]
         )
     elif received_text == "日付確認":
+        if not is_notification_enabled(user_id):
+            reply_msg = TextSendMessage(text="通知が有効になっていません。")
+            line_bot_api.reply_message(event.reply_token, reply_msg)
+            return
         user_id = get_user_id(event)
         registered_date = get_registered_date(user_id)
         reply_msg = TextSendMessage(text= registered_date)
@@ -141,16 +145,12 @@ def handle_postback(event):
         )
     elif action == "stop":
         supabase.table("notification_setting") \
-            .update({"get_notification": False}) \
+            .update({"get_notification": False},{"last_date": None}) \
             .eq("user_id", user_id) \
             .execute()
         # 除外日時を削除
         supabase.table("exceptions_date") \
             .delete() \
-            .eq("user_id", user_id) \
-            .execute()
-        supabase.table("user_info") \
-            .update({"last_date": None}) \
             .eq("user_id", user_id) \
             .execute()
         reply_msg = TextSendMessage(text="通知を停止しました")
@@ -192,9 +192,9 @@ def get_registered_date(user_id):
     return "日付が設定されていません。"
   exception_dates = supabase.table("exceptions_date").select("date").eq("user_id", user_id).execute()
 
-  message = f"登録中の日付: {last_date.data[0]['last_date']}\n"
+  message = f"登録中の日付: {last_date.data[0]['last_date']}"
   if exception_dates.data:
-    message += "通知除外日時:\n"
+    message += "\n通知除外日時:\n"
     for date in exception_dates.data:
       message += f"- {date['date']}\n"
   return message
