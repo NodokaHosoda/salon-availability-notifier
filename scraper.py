@@ -52,13 +52,13 @@ async def check_availability(request_date, exception_dates=None):
         await page.wait_for_load_state("load")
 
         # メニューを選択し空席確認へ
-        cut_only = page.locator(f"p.couponMenuName", has_text="カットのみ")
+        cut_only = page.locator(f"p.couponMenuName", has_text="12月1日から2200円。カットのみ")
         count = await cut_only.count()
         # カットのみが含まれる要素が複数あるのでカットのみに完全一致する要素を探す
         for i in range(count):
             ele = cut_only.nth(i)
             text = await ele.text_content()
-            if text.strip() == "カットのみ":
+            if text.strip() == "12月1日から2200円。カットのみ":
                 cut_only = ele
                 break
 
