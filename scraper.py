@@ -134,15 +134,15 @@ def convert_to_ymd(date_str: str) -> datetime:
     return datetime.strptime(cleaned.strip(), "%a %b %d %H:%M:%S JST %Y")
 
 if __name__ == "__main__":
-    response = supabase.table("notification_setting") \
-    .select("""
+    response = supabase.table("notification_setting").select(
+        """
         last_date,
-        get_notification,
-        user_info(line_user_id),
-        exceptions_date(date)
-    """) \
-    .eq("get_notification", True) \
-    .execute()
+        user_info (
+            line_user_id,
+            exceptions_date(date)
+        )
+        """
+    ).eq("get_notification", True).execute()
 
     for row in response.data:
         user_id = row["user_info"]["line_user_id"]
