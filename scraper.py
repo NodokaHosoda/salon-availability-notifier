@@ -37,6 +37,7 @@ def send_line_message(request_date, user_id, exception_dates=None):
     print(response.json())
 
 async def check_availability(request_date, exception_dates=None):
+    print(f'Checking exception_dates: {exception_dates}')
     #request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
     availability_elements = []
 
@@ -106,10 +107,12 @@ async def create_avaliable_date_list(elements):
         print(f'params{params}')
         date = params.get("rsvRequestDate1", [""])[0]
         print(f'date{date}')
+        date_obj = datetime.strptime(date, "%Y%m%d")
+        formatted_date = date_obj.strftime("%Y-%m-%d")
 
-        if date <= request_date:
+        if formatted_date <= request_date:
             time = params.get("rsvRequestTime1", [""])[0]
-            date = format_date(date)
+            date = format_date(formatted_date)
             time = format_time(time)
             text += f"{date} {time}\n"
     return text
@@ -132,9 +135,14 @@ def convert_to_ymd(date_str: str) -> datetime:
 
 if __name__ == "__main__":
     response = supabase.table("notification_setting") \
-        .select("last_date, get_notification, user_info(line_user_id), exceptions_date(date)") \
-        .eq("get_notification", True) \
-        .execute()
+    .select("""
+        last_date,
+        get_notification,
+        user_info(line_user_id),
+        exceptions_date(date)
+    """) \
+    .eq("get_notification", True) \
+    .execute()
 
     for row in response.data:
         user_id = row["user_info"]["line_user_id"]
