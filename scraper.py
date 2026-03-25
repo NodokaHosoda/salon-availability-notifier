@@ -41,7 +41,7 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     response = requests.post(url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
     print(response.json())
-    save_exception_dates(user_db_id, new_exceptions)
+    # save_exception_dates(user_db_id, new_exceptions)
 
 async def check_availability(request_date, exception_dates=None):
     print(f'Checking exception_dates: {exception_dates}')
@@ -117,6 +117,7 @@ async def check_availability(request_date, exception_dates=None):
 async def create_avaliable_date_list(elements, request_deadline, exception_set):
     text = ""
     exception_list = []
+    seen_datetimes = set()
     for ele in elements:
         url = await ele.get_attribute("href")
         if not url:
@@ -137,9 +138,13 @@ async def create_avaliable_date_list(elements, request_deadline, exception_set):
             if not time_str:
                 continue
             dt_obj = datetime.strptime(date_str + time_str, "%Y%m%d%H%M")
+            if dt_obj in seen_datetimes:
+                print(f'Skipping duplicate date: {dt_obj}')
+                continue
             if dt_obj in exception_set:
                 print(f'Skipping exception date: {dt_obj}')
                 continue
+            seen_datetimes.add(dt_obj)
             display_date = format_date_for_display(date_str)
             display_time = format_time_for_display(time_str)
             text += f"{display_date} {display_time}\n"
