@@ -3,6 +3,9 @@ import os, asyncio, re, json, requests
 from datetime import datetime
 from playwright.async_api import async_playwright
 from supabase import create_client
+from dotenv import load_dotenv
+
+load_dotenv()
 
 LINE_TOKEN = os.environ.get("LINE_TOKEN")
 URL = os.environ.get("TASK_URL")
@@ -10,10 +13,13 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def send_line_message(request_date, user_id, exception_dates=None):
+def send_line_message(request_date, line_user_id, user_db_id, exception_dates=None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    message = loop.run_until_complete(check_availability(request_date, exception_dates))
+    exception_set = exception_dates or set()
+    message, new_exceptions = loop.run_until_complete(
+        check_availability(request_date, exception_set)
+    )
     loop.close()
     if not message:
         return
@@ -24,7 +30,7 @@ def send_line_message(request_date, user_id, exception_dates=None):
         "Authorization": f"Bearer {LINE_TOKEN}"
     }
     body = {
-        "to": user_id,
+        "to": line_user_id,
         "messages": [
             {
                 "type": "text",
@@ -35,11 +41,13 @@ def send_line_message(request_date, user_id, exception_dates=None):
     response = requests.post(url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
     print(response.json())
+    save_exception_dates(user_db_id, new_exceptions)
 
 async def check_availability(request_date, exception_dates=None):
     print(f'Checking exception_dates: {exception_dates}')
-    #request_date = datetime.strptime(REQUEST_DATE, "%Y%m%d")
+    request_deadline = datetime.strptime(request_date, "%Y-%m-%d")
     availability_elements = []
+    exception_set = exception_dates or set()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -66,64 +74,97 @@ async def check_availability(request_date, exception_dates=None):
         await tr.locator("text=空席確認・予約する").click()
         await page.wait_for_load_state("load")
 
-        while True:
-            calendar = page.locator("table.innerTable")
-            last_date_tr = calendar.locator("tr.dayCellContainer")
-            last_date_obj = await last_date_tr.locator("th:last-of-type").text_content()
-            last_date = convert_to_ymd(last_date_obj)
-            # カレンダーの空きを検出
-            await page.screenshot(path="debug.png")
-            availability_elements += await calendar.locator("a.icnOpen").all()
+        # last_dateが含まれるページまでカレンダーを進め、空き日時を取得
+        try:
+            while True:
+                calendar = page.locator("table.innerTable")
+                last_date_tr = calendar.locator("tr.dayCellContainer")
+                last_date_obj = await last_date_tr.locator("th:last-of-type").text_content()
+                last_date = convert_to_ymd(last_date_obj)
+                # カレンダーの空きを検出
+                await page.screenshot(path="debug.png")
+                availability_elements += await calendar.locator("a.icnOpen").all()
 
-            if last_date < request_date:
-                next_btn = page.locator("a.arrowPagingWeekR")
-                if await next_btn.count() > 0 and await next_btn.is_enabled():
-                    await next_btn.click()
-                    await page.wait_for_load_state("load")
+                if last_date < request_deadline:
+                    next_btn = page.locator("a.arrowPagingWeekR")
+                    if await next_btn.count() > 0 and await next_btn.is_enabled():
+                        await next_btn.click()
+                        await page.wait_for_load_state("load")
+                    else:
+                        break
                 else:
                     break
-            else:
-                break
 
-        count = len(availability_elements)
-        print(f'count{count}')
-        print(f'list{availability_elements}')
-        if count > 0:
-            data = await create_avaliable_date_list(availability_elements)
-            if data:
-                print(data)
-                return "空きがあります！\n"+ data
-        print("No available dates found.")
-        await browser.close()
-        return False
+            count = len(availability_elements)
+            print(f'count{count}')
+            print(f'list{availability_elements}')
 
-async def create_avaliable_date_list(elements):
+            # 空き日時がある場合、exception_datesに含まれない日付のみを抽出してメッセージを作成
+            if count > 0:
+                dates, exception_list = await create_avaliable_date_list(
+                    availability_elements,
+                    request_deadline,
+                    exception_set
+                )
+                if dates:
+                    print(dates)
+                    return "空きがあります！\n" + dates, exception_list
+            print("No available dates found.")
+            return None, []
+        finally:
+            await browser.close()
+
+async def create_avaliable_date_list(elements, request_deadline, exception_set):
     text = ""
+    exception_list = []
     for ele in elements:
         url = await ele.get_attribute("href")
+        if not url:
+            continue
         print(f'url{url}')
         parsed_url = urlparse(url)
         params = parse_qs(parsed_url.query)
         print(f'params{params}')
-        date = params.get("rsvRequestDate1", [""])[0]
-        print(f'date{date}')
-        date_obj = datetime.strptime(date, "%Y%m%d")
-        formatted_date = date_obj.strftime("%Y-%m-%d")
+        date_str = params.get("rsvRequestDate1", [""])[0]
+        if not date_str:
+            continue
+        print(f'date{date_str}')
+        date_obj = datetime.strptime(date_str, "%Y%m%d")
 
-        if formatted_date <= request_date:
-            time = params.get("rsvRequestTime1", [""])[0]
-            date = format_date(formatted_date)
-            time = format_time(time)
-            text += f"{date} {time}\n"
-    return text
+        if date_obj <= request_deadline:
+            #datetimeに変換し、exception_datesに含まれない場合メッセージに追加
+            time_str = params.get("rsvRequestTime1", [""])[0]
+            if not time_str:
+                continue
+            dt_obj = datetime.strptime(date_str + time_str, "%Y%m%d%H%M")
+            if dt_obj in exception_set:
+                print(f'Skipping exception date: {dt_obj}')
+                continue
+            display_date = format_date_for_display(date_str)
+            display_time = format_time_for_display(time_str)
+            text += f"{display_date} {display_time}\n"
+            exception_list.append(dt_obj)
+    return text, exception_list
 
-def format_date(date_str: str):
+def save_exception_dates(user_db_id, exception_list):
+    if not exception_list:
+        return
+    payload = [
+        {
+            "user_id": user_db_id,
+            "date": dt.isoformat()
+        }
+        for dt in exception_list
+    ]
+    supabase.table("exceptions_date").insert(payload).execute()
+
+def format_date_for_display(date_str: str):
     jp_weekdays = ["月", "火", "水", "木", "金", "土", "日"]
     date_obj = datetime.strptime(date_str, "%Y%m%d")
     weekday_jp = jp_weekdays[date_obj.weekday()]
     return date_obj.strftime(f"%Y年%m月%d日（{weekday_jp}）")
 
-def format_time(time_str: str):
+def format_time_for_display(time_str: str):
     time_obj = datetime.strptime(time_str, "%H%M")
     return time_obj.strftime("%H:%M") 
 
@@ -133,19 +174,30 @@ def convert_to_ymd(date_str: str) -> datetime:
     # 日付文字列を datetime オブジェクトに変換
     return datetime.strptime(cleaned.strip(), "%a %b %d %H:%M:%S JST %Y")
 
+def format_date(date_str: str):
+    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+    return date_obj.strftime("%Y-%m-%d")
+
 if __name__ == "__main__":
     response = supabase.table("notification_setting").select(
         """
+        user_id,
         last_date,
         user_info (
-            line_user_id,
-            exceptions_date(date)
+            line_user_id
         )
         """
     ).eq("get_notification", True).execute()
+    print(response.data)
 
     for row in response.data:
-        user_id = row["user_info"]["line_user_id"]
         request_date = row["last_date"]
-        exception_dates = [d["date"] for d in row.get("exceptions_date", [])]
-        send_line_message(request_date, user_id, exception_dates)
+        if not request_date:
+            continue
+        line_user_id = row["user_info"]["line_user_id"]
+        user_db_id = row["user_id"]
+        exception_response = supabase.table("exceptions_date").select("date").eq("user_id", user_db_id).execute()
+        exception_dates = [datetime.fromisoformat(d["date"]) for d in (exception_response.data or [])]
+        exception_set = set(exception_dates)
+        print(f'exception_dates main: {exception_dates}')
+        send_line_message(request_date, line_user_id, user_db_id, exception_set)

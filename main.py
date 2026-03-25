@@ -25,10 +25,6 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 def index():
     return "LINE Bot is running on Cloud Run!"
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
 # Webhook受信用
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -313,3 +309,7 @@ def create_start_msg(selected_date):
     }
   }
   return start_notification
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
