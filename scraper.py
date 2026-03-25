@@ -41,7 +41,7 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     response = requests.post(url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
     print(response.json())
-    save_exception_dates(user_db_id, new_exceptions)
+    # save_exception_dates(user_db_id, new_exceptions)
 
 async def check_availability(request_date, exception_dates=None):
     print(f'Checking exception_dates: {exception_dates}')
