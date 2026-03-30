@@ -62,6 +62,7 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     if compare_with_last:
         previous_available_dates = get_last_available_dates(user_db_id) or []
         if available_dates == previous_available_dates:
+            print("No change in availability, skipping notification.")
             return
 
     push_url = "https://api.line.me/v2/bot/message/push"
@@ -143,7 +144,9 @@ async def check_availability(request_date, exception_dates=None):
                     exception_set,
                 )
                 if dates:
+                    print(f"Available dates found: {dates}")
                     return f"{AVAILABILITY_MESSAGE_PREFIX}{dates}", exception_list, raw_available_dates
+            print("No available dates found")
             return f"{request_date}{NO_AVAILABILITY_MESSAGE_SUFFIX}", [], raw_available_dates if availability_elements else []
         finally:
             await browser.close()
