@@ -2,6 +2,7 @@ from datetime import datetime
 from urllib.parse import parse_qs
 from pathlib import Path
 import os
+import threading
 
 from flask import Flask, abort, jsonify, render_template, request
 from dotenv import load_dotenv
@@ -167,12 +168,9 @@ def handle_message(event):
                 text="現在の空き状況を確認しています。"
             )
             line_bot_api.reply_message(event.reply_token, reply_msg)
-            send_line_message(
-                get_notification_target_date(user_id),
-                event.source.user_id,
+            start_immediate_availability_check(
                 user_id,
-                set(get_exception_dates(user_id)),
-                compare_with_last=False,
+                event.source.user_id,
             )
             return
     elif received_text == "登録情報確認":
@@ -319,6 +317,31 @@ def get_exception_dates(user_id):
         for row in (response.data or [])
         if row.get("date")
     ]
+
+
+def run_immediate_availability_check(user_id, line_user_id):
+    try:
+        send_line_message(
+            get_notification_target_date(user_id),
+            line_user_id,
+            user_id,
+            set(get_exception_dates(user_id)),
+            compare_with_last=False,
+        )
+    except Exception:
+        print("Immediate availability check failed", flush=True)
+        line_bot_api.push_message(
+            line_user_id,
+            TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
+        )
+
+
+def start_immediate_availability_check(user_id, line_user_id):
+    threading.Thread(
+        target=run_immediate_availability_check,
+        args=(user_id, line_user_id),
+        daemon=True,
+    ).start()
 
 
 def get_registration_summary(user_id):
