@@ -1,88 +1,129 @@
-from urllib.parse import urlparse, parse_qs
-import os, asyncio, re, json, requests
-from datetime import datetime
+from datetime import datetime, timedelta
+from urllib.parse import parse_qs, quote, urlparse
+from pathlib import Path
+import asyncio
+import json
+import os
+import re
+
+import requests
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 from supabase import create_client
-from dotenv import load_dotenv
 
 load_dotenv()
+load_dotenv(dotenv_path=Path.home() / ".env", override=False)
 
 LINE_TOKEN = os.environ.get("LINE_TOKEN")
-URL = os.environ.get("TASK_URL")
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
+TASK_URL = os.environ.get("TASK_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+MENU_ENTRY_TEXT = "\u7a7a\u5e2d\u78ba\u8a8d\u30fb\u4e88\u7d04\u3059\u308b"
+COURSE_TEXT = "\u0031\u0032\u6708\u0031\u65e5\u304b\u3089\u0032\u0032\u0030\u0030\u5186\u3002\u30ab\u30c3\u30c8\u306e\u307f"
+AVAILABILITY_MESSAGE_PREFIX = "\u7a7a\u304d\u304c\u3042\u308a\u307e\u3059\uff01\n"
+NO_AVAILABILITY_MESSAGE_SUFFIX = " \u307e\u3067\u306e\u7a7a\u304d\u306f\u3042\u308a\u307e\u305b\u3093\u3002"
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def send_line_message(request_date, line_user_id, user_db_id, exception_dates=None):
+
+def get_last_available_dates(user_db_id):
+    response = (
+        supabase.table("notification_setting")
+        .select("last_available_dates")
+        .eq("user_id", user_db_id)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0].get("last_available_dates")
+
+
+def update_last_available_dates(user_db_id, available_dates):
+    (
+        supabase.table("notification_setting")
+        .update({"last_available_dates": available_dates})
+        .eq("user_id", user_db_id)
+        .execute()
+    )
+
+
+def send_line_message(request_date, line_user_id, user_db_id, exception_dates=None, compare_with_last=True):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     exception_set = exception_dates or set()
-    message, new_exceptions = loop.run_until_complete(
+    message, new_exceptions, raw_available_dates = loop.run_until_complete(
         check_availability(request_date, exception_set)
     )
     loop.close()
-    if not message:
-        return
 
-    url = "https://api.line.me/v2/bot/message/push"
+    available_dates = serialize_available_dates(raw_available_dates)
+    if compare_with_last:
+        previous_available_dates = get_last_available_dates(user_db_id) or []
+        if available_dates == previous_available_dates:
+            return
+
+    push_url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_TOKEN}"
+        "Authorization": f"Bearer {LINE_TOKEN}",
     }
     body = {
         "to": line_user_id,
-        "messages": [
-            {
-                "type": "text",
-                "text": message
-            }
-        ]
+        "messages": [{"type": "text", "text": message}],
     }
-    response = requests.post(url, headers=headers, data=json.dumps(body))
+    response = requests.post(push_url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
     print(response.json())
-    # save_exception_dates(user_db_id, new_exceptions)
+
+    if not response.ok:
+        return
+
+    if compare_with_last:
+        update_last_available_dates(user_db_id, available_dates)
+        
+    if message.startswith(AVAILABILITY_MESSAGE_PREFIX) and new_exceptions:
+        prompt_body = create_exclusion_prompt(line_user_id, new_exceptions)
+        if prompt_body:
+            prompt_response = requests.post(push_url, headers=headers, data=json.dumps(prompt_body))
+            print("Prompt status:", prompt_response.status_code)
+            print(prompt_response.json())
+
 
 async def check_availability(request_date, exception_dates=None):
-    print(f'Checking exception_dates: {exception_dates}')
     request_deadline = datetime.strptime(request_date, "%Y-%m-%d")
     availability_elements = []
     exception_set = exception_dates or set()
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True, args=["--no-sandbox"])
         context = await browser.new_context()
         page = await context.new_page()
-        await page.goto(URL, wait_until="domcontentloaded")
+        await page.goto(TASK_URL, wait_until="domcontentloaded")
 
-        # メニューを選択画面へ
-        await page.get_by_text("空席確認・予約する").nth(0).click()
+        await page.get_by_text(MENU_ENTRY_TEXT).nth(0).click()
         await page.wait_for_load_state("load")
 
-        # メニューを選択し空席確認へ
-        cut_only = page.locator(f"p.couponMenuName", has_text="12月1日から2200円。カットのみ")
-        count = await cut_only.count()
-        # カットのみが含まれる要素が複数あるのでカットのみに完全一致する要素を探す
-        for i in range(count):
-            ele = cut_only.nth(i)
-            text = await ele.text_content()
-            if text.strip() == "12月1日から2200円。カットのみ":
-                cut_only = ele
+        course_locator = page.locator("p.couponMenuName", has_text=COURSE_TEXT)
+        count = await course_locator.count()
+        for index in range(count):
+            element = course_locator.nth(index)
+            text = await element.text_content()
+            if text and text.strip() == COURSE_TEXT:
+                course_locator = element
                 break
 
-        tr = cut_only.locator("xpath=ancestor::tr")
-        await tr.locator("text=空席確認・予約する").click()
+        row = course_locator.locator("xpath=ancestor::tr")
+        await row.locator(f"text={MENU_ENTRY_TEXT}").click()
         await page.wait_for_load_state("load")
 
-        # last_dateが含まれるページまでカレンダーを進め、空き日時を取得
         try:
             while True:
                 calendar = page.locator("table.innerTable")
                 last_date_tr = calendar.locator("tr.dayCellContainer")
                 last_date_obj = await last_date_tr.locator("th:last-of-type").text_content()
                 last_date = convert_to_ymd(last_date_obj)
-                # カレンダーの空きを検出
-                await page.screenshot(path="debug.png")
                 availability_elements += await calendar.locator("a.icnOpen").all()
 
                 if last_date < request_deadline:
@@ -95,114 +136,192 @@ async def check_availability(request_date, exception_dates=None):
                 else:
                     break
 
-            count = len(availability_elements)
-            print(f'count{count}')
-            print(f'list{availability_elements}')
-
-            # 空き日時がある場合、exception_datesに含まれない日付のみを抽出してメッセージを作成
-            if count > 0:
-                dates, exception_list = await create_avaliable_date_list(
+            if availability_elements:
+                dates, exception_list, raw_available_dates = await create_available_date_list(
                     availability_elements,
                     request_deadline,
-                    exception_set
+                    exception_set,
                 )
                 if dates:
-                    print(dates)
-                    return "空きがあります！\n" + dates, exception_list
-            print("No available dates found.")
-            return None, []
+                    return f"{AVAILABILITY_MESSAGE_PREFIX}{dates}", exception_list, raw_available_dates
+            return f"{request_date}{NO_AVAILABILITY_MESSAGE_SUFFIX}", [], raw_available_dates if availability_elements else []
         finally:
             await browser.close()
 
-async def create_avaliable_date_list(elements, request_deadline, exception_set):
+
+async def create_available_date_list(elements, request_deadline, exception_set):
     text = ""
     exception_list = []
+    raw_available_dates = []
     seen_datetimes = set()
-    for ele in elements:
-        url = await ele.get_attribute("href")
-        if not url:
+    for element in elements:
+        href = await element.get_attribute("href")
+        if not href:
             continue
-        print(f'url{url}')
-        parsed_url = urlparse(url)
+
+        parsed_url = urlparse(href)
         params = parse_qs(parsed_url.query)
-        print(f'params{params}')
         date_str = params.get("rsvRequestDate1", [""])[0]
         if not date_str:
             continue
-        print(f'date{date_str}')
-        date_obj = datetime.strptime(date_str, "%Y%m%d")
 
-        if date_obj <= request_deadline:
-            #datetimeに変換し、exception_datesに含まれない場合メッセージに追加
-            time_str = params.get("rsvRequestTime1", [""])[0]
-            if not time_str:
-                continue
-            dt_obj = datetime.strptime(date_str + time_str, "%Y%m%d%H%M")
-            if dt_obj in seen_datetimes:
-                print(f'Skipping duplicate date: {dt_obj}')
-                continue
-            if dt_obj in exception_set:
-                print(f'Skipping exception date: {dt_obj}')
-                continue
-            seen_datetimes.add(dt_obj)
-            display_date = format_date_for_display(date_str)
-            display_time = format_time_for_display(time_str)
-            text += f"{display_date} {display_time}\n"
-            exception_list.append(dt_obj)
-    return text, exception_list
+        date_obj = datetime.strptime(date_str, "%Y%m%d")
+        if date_obj > request_deadline:
+            continue
+
+        time_str = params.get("rsvRequestTime1", [""])[0]
+        if not time_str:
+            continue
+
+        dt_obj = datetime.strptime(date_str + time_str, "%Y%m%d%H%M")
+        if dt_obj in seen_datetimes:
+            continue
+
+        seen_datetimes.add(dt_obj)
+        raw_available_dates.append(dt_obj)
+
+        if dt_obj in exception_set:
+            continue
+
+        text += f"{format_date_for_display(date_str)} {format_time_for_display(time_str)}\n"
+        exception_list.append(dt_obj)
+    return text, exception_list, raw_available_dates
+
 
 def save_exception_dates(user_db_id, exception_list):
     if not exception_list:
         return
+
+    existing_response = (
+        supabase.table("exceptions_date").select("date").eq("user_id", user_db_id).execute()
+    )
+    existing_dates = {
+        datetime.fromisoformat(row["date"])
+        for row in (existing_response.data or [])
+        if row.get("date")
+    }
     payload = [
-        {
-            "user_id": user_db_id,
-            "date": dt.isoformat()
-        }
+        {"user_id": user_db_id, "date": dt.isoformat()}
         for dt in exception_list
+        if dt not in existing_dates
     ]
-    supabase.table("exceptions_date").insert(payload).execute()
+    if payload:
+        supabase.table("exceptions_date").insert(payload).execute()
 
-def format_date_for_display(date_str: str):
-    jp_weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+
+def create_exclusion_prompt(line_user_id, exception_list):
+    liff_url = build_liff_add_url(exception_list)
+    if not liff_url:
+        return None
+
+    return {
+        "to": line_user_id,
+        "messages": [
+            {
+                "type": "template",
+                "altText": "\u901a\u77e5\u3057\u305f\u65e5\u4ed8\u3092\u9664\u5916\u5bfe\u8c61\u306b\u8ffd\u52a0\u3067\u304d\u307e\u3059",
+                "template": {
+                    "type": "buttons",
+                    "title": "\u901a\u77e5\u3057\u305f\u65e5\u4ed8\u306e\u9664\u5916",
+                    "text": (
+                        "\u4e0a\u8a18\u306e\u65e5\u4ed8\u3092\u901a\u77e5\u5bfe\u8c61\u304b\u3089"
+                        "\u9664\u5916\u3059\u308b\u5834\u5408\u306f\u753b\u9762\u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002"
+                    ),
+                    "actions": [
+                        {
+                            "type": "uri",
+                            "label": "\u9664\u5916\u3059\u308b",
+                            "uri": liff_url,
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def build_liff_add_url(exception_list):
+    if not APP_BASE_URL:
+        return None
+
+    encoded_dates = encode_exception_dates(exception_list)
+    candidate_url = f"{APP_BASE_URL}/liff/exclude-add?dates={quote(encoded_dates)}"
+    if len(candidate_url) > 1800:
+        return None
+    return candidate_url
+
+
+def serialize_available_dates(exception_list):
+    unique_dates = sorted(set(exception_list))
+    return [dt.strftime("%Y%m%d%H%M") for dt in unique_dates]
+
+
+def encode_exception_dates(exception_list):
+    return ",".join(serialize_available_dates(exception_list))
+
+
+def format_date_for_display(date_str):
+    weekdays = [
+        "\u6708",
+        "\u706b",
+        "\u6c34",
+        "\u6728",
+        "\u91d1",
+        "\u571f",
+        "\u65e5",
+    ]
     date_obj = datetime.strptime(date_str, "%Y%m%d")
-    weekday_jp = jp_weekdays[date_obj.weekday()]
-    return date_obj.strftime(f"%Y年%m月%d日（{weekday_jp}）")
+    weekday = weekdays[date_obj.weekday()]
+    return date_obj.strftime(f"%Y\u5e74%m\u6708%d\u65e5\uff08{weekday}\uff09")
 
-def format_time_for_display(time_str: str):
+
+def format_time_for_display(time_str):
     time_obj = datetime.strptime(time_str, "%H%M")
-    return time_obj.strftime("%H:%M") 
+    return time_obj.strftime("%H:%M")
 
-def convert_to_ymd(date_str: str) -> datetime:
-    # （水）など日本語の曜日部分を削除
-    cleaned = re.sub(r"[（(].*?[)）]", "", date_str)
-    # 日付文字列を datetime オブジェクトに変換
+
+def convert_to_ymd(date_str):
+    cleaned = re.sub(r"[\uff08(].*?[\uff09)]", "", date_str or "")
     return datetime.strptime(cleaned.strip(), "%a %b %d %H:%M:%S JST %Y")
 
-def format_date(date_str: str):
-    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
-    return date_obj.strftime("%Y-%m-%d")
 
 if __name__ == "__main__":
-    response = supabase.table("notification_setting").select(
-        """
-        user_id,
-        last_date,
-        user_info (
-            line_user_id
+    response = (
+        supabase.table("notification_setting")
+        .select(
+            """
+            user_id,
+            last_date,
+            user_info (
+                line_user_id
+            )
+            """
         )
-        """
-    ).eq("get_notification", True).execute()
-    print(response.data)
+        .eq("get_notification", True)
+        .execute()
+    )
 
-    for row in response.data:
+    for row in response.data or []:
         request_date = row["last_date"]
         if not request_date:
             continue
+
+        if datetime.strptime(request_date, "%Y-%m-%d").date() < (datetime.utcnow() + timedelta(hours=9)).date():
+            (
+                supabase.table("notification_setting")
+                .update({"get_notification": False, "last_available_dates": None})
+                .eq("user_id", row["user_id"])
+                .execute()
+            )
+            continue
         line_user_id = row["user_info"]["line_user_id"]
         user_db_id = row["user_id"]
-        exception_response = supabase.table("exceptions_date").select("date").eq("user_id", user_db_id).execute()
-        exception_dates = [datetime.fromisoformat(d["date"]) for d in (exception_response.data or [])]
-        exception_set = set(exception_dates)
-        print(f'exception_dates main: {exception_dates}')
-        send_line_message(request_date, line_user_id, user_db_id, exception_set)
+        exception_response = (
+            supabase.table("exceptions_date").select("date").eq("user_id", user_db_id).execute()
+        )
+        exception_dates = [
+            datetime.fromisoformat(item["date"])
+            for item in (exception_response.data or [])
+            if item.get("date")
+        ]
+        send_line_message(request_date, line_user_id, user_db_id, set(exception_dates))
