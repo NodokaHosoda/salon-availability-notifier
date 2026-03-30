@@ -1,8 +1,10 @@
 from datetime import datetime
 from urllib.parse import parse_qs
+from pathlib import Path
 import os
 
 from flask import Flask, abort, jsonify, render_template, request
+from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -14,6 +16,10 @@ from linebot.models import (
     TextSendMessage,
 )
 from supabase import create_client
+from scraper import send_line_message
+
+load_dotenv()
+load_dotenv(dotenv_path=Path.home() / ".env", override=False)
 
 app = Flask(__name__)
 
@@ -120,7 +126,7 @@ def handle_follow(event):
                     "user_id": response.data[0]["id"],
                     "last_date": None,
                     "get_notification": False,
-                }
+                                    }
             )
             .execute()
         )
@@ -131,26 +137,17 @@ def handle_message(event):
     received_text = event.message.text
     user_id = get_user_id_from_line_user_id(event.source.user_id)
 
-    if received_text == "通知開始":
+    if received_text == "通知設定":
         if is_notification_enabled(user_id):
-            reply_msg = TextSendMessage(
-                text="通知は既に有効です。新しい通知を開始する前に、現在の通知を停止してください。"
+            reply_msg = TemplateSendMessage(
+                alt_text="通知を停止しますか？",
+                template=stop_notification["template"],
             )
-            line_bot_api.reply_message(event.reply_token, reply_msg)
-            return
-        reply_msg = TemplateSendMessage(
-            alt_text="通知したい期限日を選択してください。",
-            template=set_notification_date["template"],
-        )
-    elif received_text == "通知停止":
-        if not is_notification_enabled(user_id):
-            reply_msg = TextSendMessage(text="通知は既に停止されています。")
-            line_bot_api.reply_message(event.reply_token, reply_msg)
-            return
-        reply_msg = TemplateSendMessage(
-            alt_text="通知を停止しますか？",
-            template=stop_notification["template"],
-        )
+        else:
+            reply_msg = TemplateSendMessage(
+                alt_text="通知したい期限日を選択してください。",
+                template=set_notification_date["template"],
+            )
     elif received_text == "日付変更":
         if not is_notification_enabled(user_id):
             reply_msg = TextSendMessage(text="通知が有効になっていません。まずは通知を開始してください。")
@@ -160,8 +157,26 @@ def handle_message(event):
             alt_text="変更したい日付を選択してください。",
             template=modify_date["template"],
         )
-    elif received_text == "日付確認":
-        reply_msg = TextSendMessage(text=get_registered_date(user_id))
+    elif received_text == "即時確認":
+        if not is_notification_enabled(user_id):
+            reply_msg = TextSendMessage(
+                text="通知が有効になっていません。まずは通知を開始してください。"
+            )
+        else:
+            reply_msg = TextSendMessage(
+                text="現在の空き状況を確認しています。"
+            )
+            line_bot_api.reply_message(event.reply_token, reply_msg)
+            send_line_message(
+                get_notification_target_date(user_id),
+                event.source.user_id,
+                user_id,
+                set(get_exception_dates(user_id)),
+                compare_with_last=False,
+            )
+            return
+    elif received_text == "登録情報確認":
+        reply_msg = TextSendMessage(text=get_registration_summary(user_id))
     elif received_text == "除外日を解除":
         remove_url = build_liff_remove_url()
         if not remove_url:
@@ -219,7 +234,7 @@ def handle_postback(event):
     elif action == "stop":
         (
             supabase.table("notification_setting")
-            .update({"get_notification": False, "last_date": None})
+            .update({"get_notification": False, "last_date": None, "last_available_dates": None})
             .eq("user_id", user_id)
             .execute()
         )
@@ -263,13 +278,8 @@ def get_user_id_from_line_user_id(line_user_id):
 
 
 def is_notification_enabled(user_id):
-    response = (
-        supabase.table("notification_setting")
-        .select("get_notification")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return bool(response.data and response.data[0]["get_notification"])
+    notification_row = get_notification_settings(user_id)
+    return bool(notification_row.get("get_notification"))
 
 
 def update_last_date(user_id, new_date):
@@ -281,30 +291,54 @@ def update_last_date(user_id, new_date):
     )
 
 
-def get_registered_date(user_id):
-    last_date_response = (
+def get_notification_settings(user_id):
+    response = (
         supabase.table("notification_setting")
-        .select("last_date")
+        .select("last_date,get_notification")
         .eq("user_id", user_id)
         .execute()
     )
-    last_date = last_date_response.data[0]["last_date"] if last_date_response.data else None
-    exception_dates = (
+    return response.data[0] if response.data else {}
+
+
+def get_notification_target_date(user_id):
+    notification_row = get_notification_settings(user_id)
+    return notification_row.get("last_date")
+
+
+def get_exception_dates(user_id):
+    response = (
         supabase.table("exceptions_date")
         .select("date")
         .eq("user_id", user_id)
         .order("date")
         .execute()
     )
+    return [
+        datetime.fromisoformat(row["date"])
+        for row in (response.data or [])
+        if row.get("date")
+    ]
 
-    last_date_label = last_date or "未設定"
-    message = f"登録中の通知期限日: {last_date_label}"
-    if exception_dates.data:
-        message += "\n除外日時:"
-        for date in exception_dates.data:
-            message += f"\n- {format_iso_for_display(date['date'])}"
-    return message
 
+def get_registration_summary(user_id):
+    is_enabled = is_notification_enabled(user_id)
+    last_date = get_notification_target_date(user_id)
+
+    exception_dates = get_exception_dates(user_id)
+
+    lines = [f"通知状態: {'ON' if is_enabled else 'OFF'}"]
+    if is_enabled:
+        lines.append(f"通知期限日: {last_date or '未設定'}")
+
+    if exception_dates:
+        lines.append("除外日時:")
+        for date in exception_dates:
+            lines.append(f"- {format_iso_for_display(date.isoformat())}")
+    else:
+        lines.append("除外日時: なし")
+
+    return "\n".join(lines)
 
 def decode_iso_dates(date_values):
     decoded_dates = []

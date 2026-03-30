@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import parse_qs, quote, urlparse
+from pathlib import Path
 import asyncio
 import json
 import os
@@ -11,6 +12,7 @@ from playwright.async_api import async_playwright
 from supabase import create_client
 
 load_dotenv()
+load_dotenv(dotenv_path=Path.home() / ".env", override=False)
 
 LINE_TOKEN = os.environ.get("LINE_TOKEN")
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
@@ -21,20 +23,46 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 MENU_ENTRY_TEXT = "\u7a7a\u5e2d\u78ba\u8a8d\u30fb\u4e88\u7d04\u3059\u308b"
 COURSE_TEXT = "\u0031\u0032\u6708\u0031\u65e5\u304b\u3089\u0032\u0032\u0030\u0030\u5186\u3002\u30ab\u30c3\u30c8\u306e\u307f"
 AVAILABILITY_MESSAGE_PREFIX = "\u7a7a\u304d\u304c\u3042\u308a\u307e\u3059\uff01\n"
+NO_AVAILABILITY_MESSAGE_SUFFIX = " \u307e\u3067\u306e\u7a7a\u304d\u306f\u3042\u308a\u307e\u305b\u3093\u3002"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def send_line_message(request_date, line_user_id, user_db_id, exception_dates=None):
+def get_last_available_dates(user_db_id):
+    response = (
+        supabase.table("notification_setting")
+        .select("last_available_dates")
+        .eq("user_id", user_db_id)
+        .execute()
+    )
+    if not response.data:
+        return None
+    return response.data[0].get("last_available_dates")
+
+
+def update_last_available_dates(user_db_id, available_dates):
+    (
+        supabase.table("notification_setting")
+        .update({"last_available_dates": available_dates})
+        .eq("user_id", user_db_id)
+        .execute()
+    )
+
+
+def send_line_message(request_date, line_user_id, user_db_id, exception_dates=None, compare_with_last=True):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     exception_set = exception_dates or set()
-    message, new_exceptions = loop.run_until_complete(
+    message, new_exceptions, raw_available_dates = loop.run_until_complete(
         check_availability(request_date, exception_set)
     )
     loop.close()
-    if not message:
-        return
+
+    available_dates = serialize_available_dates(raw_available_dates)
+    if compare_with_last:
+        previous_available_dates = get_last_available_dates(user_db_id) or []
+        if available_dates == previous_available_dates:
+            return
 
     push_url = "https://api.line.me/v2/bot/message/push"
     headers = {
@@ -48,9 +76,14 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     response = requests.post(push_url, headers=headers, data=json.dumps(body))
     print("Status:", response.status_code)
     print(response.json())
-    # save_exception_dates(user_db_id, new_exceptions)
 
-    if response.ok and new_exceptions:
+    if not response.ok:
+        return
+
+    if compare_with_last:
+        update_last_available_dates(user_db_id, available_dates)
+        
+    if message.startswith(AVAILABILITY_MESSAGE_PREFIX) and new_exceptions:
         prompt_body = create_exclusion_prompt(line_user_id, new_exceptions)
         if prompt_body:
             prompt_response = requests.post(push_url, headers=headers, data=json.dumps(prompt_body))
@@ -104,14 +137,14 @@ async def check_availability(request_date, exception_dates=None):
                     break
 
             if availability_elements:
-                dates, exception_list = await create_available_date_list(
+                dates, exception_list, raw_available_dates = await create_available_date_list(
                     availability_elements,
                     request_deadline,
                     exception_set,
                 )
                 if dates:
-                    return f"{AVAILABILITY_MESSAGE_PREFIX}{dates}", exception_list
-            return None, []
+                    return f"{AVAILABILITY_MESSAGE_PREFIX}{dates}", exception_list, raw_available_dates
+            return f"{request_date}{NO_AVAILABILITY_MESSAGE_SUFFIX}", [], raw_available_dates if availability_elements else []
         finally:
             await browser.close()
 
@@ -119,6 +152,7 @@ async def check_availability(request_date, exception_dates=None):
 async def create_available_date_list(elements, request_deadline, exception_set):
     text = ""
     exception_list = []
+    raw_available_dates = []
     seen_datetimes = set()
     for element in elements:
         href = await element.get_attribute("href")
@@ -140,13 +174,18 @@ async def create_available_date_list(elements, request_deadline, exception_set):
             continue
 
         dt_obj = datetime.strptime(date_str + time_str, "%Y%m%d%H%M")
-        if dt_obj in seen_datetimes or dt_obj in exception_set:
+        if dt_obj in seen_datetimes:
             continue
 
         seen_datetimes.add(dt_obj)
+        raw_available_dates.append(dt_obj)
+
+        if dt_obj in exception_set:
+            continue
+
         text += f"{format_date_for_display(date_str)} {format_time_for_display(time_str)}\n"
         exception_list.append(dt_obj)
-    return text, exception_list
+    return text, exception_list, raw_available_dates
 
 
 def save_exception_dates(user_db_id, exception_list):
@@ -212,9 +251,13 @@ def build_liff_add_url(exception_list):
     return candidate_url
 
 
-def encode_exception_dates(exception_list):
+def serialize_available_dates(exception_list):
     unique_dates = sorted(set(exception_list))
-    return ",".join(dt.strftime("%Y%m%d%H%M") for dt in unique_dates)
+    return [dt.strftime("%Y%m%d%H%M") for dt in unique_dates]
+
+
+def encode_exception_dates(exception_list):
+    return ",".join(serialize_available_dates(exception_list))
 
 
 def format_date_for_display(date_str):
@@ -261,6 +304,15 @@ if __name__ == "__main__":
     for row in response.data or []:
         request_date = row["last_date"]
         if not request_date:
+            continue
+
+        if datetime.strptime(request_date, "%Y-%m-%d").date() < (datetime.utcnow() + timedelta(hours=9)).date():
+            (
+                supabase.table("notification_setting")
+                .update({"get_notification": False, "last_available_dates": None})
+                .eq("user_id", row["user_id"])
+                .execute()
+            )
             continue
         line_user_id = row["user_info"]["line_user_id"]
         user_db_id = row["user_id"]
