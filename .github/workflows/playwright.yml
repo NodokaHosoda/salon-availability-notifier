@@ -28,7 +28,7 @@ jobs:
       - name: Run Playwright script
         run: python scraper.py
         env:
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           TASK_URL: ${{ vars.TASK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
