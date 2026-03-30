@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, quote, urlparse
 from pathlib import Path
 import asyncio
@@ -20,10 +20,10 @@ TASK_URL = os.environ.get("TASK_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-MENU_ENTRY_TEXT = "\u7a7a\u5e2d\u78ba\u8a8d\u30fb\u4e88\u7d04\u3059\u308b"
-COURSE_TEXT = "\u0031\u0032\u6708\u0031\u65e5\u304b\u3089\u0032\u0032\u0030\u0030\u5186\u3002\u30ab\u30c3\u30c8\u306e\u307f"
-AVAILABILITY_MESSAGE_PREFIX = "\u7a7a\u304d\u304c\u3042\u308a\u307e\u3059\uff01\n"
-NO_AVAILABILITY_MESSAGE_SUFFIX = " \u307e\u3067\u306e\u7a7a\u304d\u306f\u3042\u308a\u307e\u305b\u3093\u3002"
+MENU_ENTRY_TEXT = "空席確認・予約する"
+COURSE_TEXT = "12月1日から2200円。カットのみ"
+AVAILABILITY_MESSAGE_PREFIX = "空きがあります！\n"
+NO_AVAILABILITY_MESSAGE_SUFFIX = " までの空きはありません。"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -219,18 +219,17 @@ def create_exclusion_prompt(line_user_id, exception_list):
         "messages": [
             {
                 "type": "template",
-                "altText": "\u901a\u77e5\u3057\u305f\u65e5\u4ed8\u3092\u9664\u5916\u5bfe\u8c61\u306b\u8ffd\u52a0\u3067\u304d\u307e\u3059",
+                "altText": "通知した日付を除外対象に追加できます",
                 "template": {
                     "type": "buttons",
-                    "title": "\u901a\u77e5\u3057\u305f\u65e5\u4ed8\u306e\u9664\u5916",
+                    "title": "通知した日付の除外",
                     "text": (
-                        "\u4e0a\u8a18\u306e\u65e5\u4ed8\u3092\u901a\u77e5\u5bfe\u8c61\u304b\u3089"
-                        "\u9664\u5916\u3059\u308b\u5834\u5408\u306f\u753b\u9762\u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002"
+                        "上記の日付を通知対象から除外する場合は画面を開いてください。"
                     ),
                     "actions": [
                         {
                             "type": "uri",
-                            "label": "\u9664\u5916\u3059\u308b",
+                            "label": "除外する",
                             "uri": liff_url,
                         }
                     ],
@@ -262,17 +261,17 @@ def encode_exception_dates(exception_list):
 
 def format_date_for_display(date_str):
     weekdays = [
-        "\u6708",
-        "\u706b",
-        "\u6c34",
-        "\u6728",
-        "\u91d1",
-        "\u571f",
-        "\u65e5",
+        "月",
+        "火",
+        "水",
+        "木",
+        "金",
+        "土",
+        "日",
     ]
     date_obj = datetime.strptime(date_str, "%Y%m%d")
     weekday = weekdays[date_obj.weekday()]
-    return date_obj.strftime(f"%Y\u5e74%m\u6708%d\u65e5\uff08{weekday}\uff09")
+    return date_obj.strftime(f"%Y年%m月%d日（{weekday}）")
 
 
 def format_time_for_display(time_str):
@@ -281,7 +280,7 @@ def format_time_for_display(time_str):
 
 
 def convert_to_ymd(date_str):
-    cleaned = re.sub(r"[\uff08(].*?[\uff09)]", "", date_str or "")
+    cleaned = re.sub(r"[（(].*?[）)]", "", date_str or "")
     return datetime.strptime(cleaned.strip(), "%a %b %d %H:%M:%S JST %Y")
 
 
@@ -306,7 +305,7 @@ if __name__ == "__main__":
         if not request_date:
             continue
 
-        if datetime.strptime(request_date, "%Y-%m-%d").date() < (datetime.utcnow() + timedelta(hours=9)).date():
+        if datetime.strptime(request_date, "%Y-%m-%d").date() < (datetime.now(timezone.utc) + timedelta(hours=9)).date():
             (
                 supabase.table("notification_setting")
                 .update({"get_notification": False, "last_available_dates": None})
