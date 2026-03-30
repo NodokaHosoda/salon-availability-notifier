@@ -2,7 +2,6 @@ from datetime import datetime
 from urllib.parse import parse_qs
 from pathlib import Path
 import os
-import threading
 import traceback
 
 from flask import Flask, abort, jsonify, render_template, request
@@ -169,10 +168,20 @@ def handle_message(event):
                 text="現在の空き状況を確認しています。"
             )
             line_bot_api.reply_message(event.reply_token, reply_msg)
-            start_immediate_availability_check(
-                user_id,
-                event.source.user_id,
-            )
+            try:
+                send_line_message(
+                    get_notification_target_date(user_id),
+                    event.source.user_id,
+                    user_id,
+                    set(get_exception_dates(user_id)),
+                    compare_with_last=False,
+                )
+            except Exception as exc:
+                traceback.print_exception(type(exc), exc, exc.__traceback__)
+                line_bot_api.push_message(
+                    event.source.user_id,
+                    TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
+                )
             return
     elif received_text == "登録情報確認":
         reply_msg = TextSendMessage(text=get_registration_summary(user_id))
@@ -319,30 +328,6 @@ def get_exception_dates(user_id):
         if row.get("date")
     ]
 
-
-def run_immediate_availability_check(user_id, line_user_id):
-    try:
-        send_line_message(
-            get_notification_target_date(user_id),
-            line_user_id,
-            user_id,
-            set(get_exception_dates(user_id)),
-            compare_with_last=False,
-        )
-    except Exception as exc:
-        traceback.print_exception(type(exc), exc, exc.__traceback__)
-        line_bot_api.push_message(
-            line_user_id,
-            TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
-        )
-
-
-def start_immediate_availability_check(user_id, line_user_id):
-    threading.Thread(
-        target=run_immediate_availability_check,
-        args=(user_id, line_user_id),
-        daemon=True,
-    ).start()
 
 
 def get_registration_summary(user_id):
