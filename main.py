@@ -3,6 +3,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 import os
 import threading
+import traceback
 
 from flask import Flask, abort, jsonify, render_template, request
 from dotenv import load_dotenv
@@ -328,8 +329,8 @@ def run_immediate_availability_check(user_id, line_user_id):
             set(get_exception_dates(user_id)),
             compare_with_last=False,
         )
-    except Exception:
-        print("Immediate availability check failed", flush=True)
+    except Exception as exc:
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
         line_bot_api.push_message(
             line_user_id,
             TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
