@@ -14,7 +14,7 @@ from supabase import create_client
 load_dotenv()
 load_dotenv(dotenv_path=Path.home() / ".env", override=False)
 
-LINE_TOKEN = os.environ.get("LINE_TOKEN")
+LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
 TASK_URL = os.environ.get("TASK_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
