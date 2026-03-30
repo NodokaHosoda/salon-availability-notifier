@@ -41,6 +41,11 @@
     return Array.from(new Set(values));
   }
 
+  function isPreviewMode() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("preview") === "1" || ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  }
+
   function renderDates(dateValues) {
     listEl.innerHTML = "";
     dateValues.forEach((value, index) => {
@@ -67,6 +72,9 @@
   }
 
   async function initLiff() {
+    if (isPreviewMode()) {
+      return "__preview__";
+    }
     if (!config.liffId) {
       throw new Error("LIFF ID が設定されていません。");
     }
@@ -81,7 +89,18 @@
 
   async function loadDates(userId) {
     if (config.mode === "add") {
-      return unique(getEncodedDatesFromQuery());
+      const addDates = unique(getEncodedDatesFromQuery());
+      if (addDates.length > 0) {
+        return addDates;
+      }
+      if (userId === "__preview__") {
+        return ["2099-12-24T10:00:00", "2099-12-25T14:30:00"];
+      }
+      return [];
+    }
+
+    if (userId === "__preview__") {
+      return ["2099-12-20T11:00:00", "2099-12-22T15:00:00"];
     }
 
     const response = await fetch("/api/exceptions", {
@@ -97,6 +116,12 @@
   }
 
   async function submitDates(userId, dates) {
+    if (userId === "__preview__") {
+      return config.mode === "add"
+        ? { saved_count: dates.length }
+        : { removed_count: dates.length };
+    }
+
     const endpoint = config.mode === "add" ? "/api/exceptions" : "/api/exceptions/remove";
     const response = await fetch(endpoint, {
       method: "POST",
@@ -119,6 +144,9 @@
     }
 
     const dates = await loadDates(userId);
+    if (userId === "__preview__") {
+      setStatus("プレビュー表示です。送信処理はローカルでは実行されません。");
+    }
     if (dates.length === 0) {
       setStatus(config.mode === "add" ? "今回追加できる候補はありません。" : "現在、登録済みの除外日はありません。");
       showForm(false);
