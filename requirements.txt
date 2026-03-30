@@ -5,3 +5,4 @@ gunicorn
 line-bot-sdk
 supabase>=1.0.0
 python-dotenv
+google-cloud-tasks

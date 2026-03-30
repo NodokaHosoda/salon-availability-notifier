@@ -1,10 +1,12 @@
 from datetime import datetime
 from urllib.parse import parse_qs
+import json
 from pathlib import Path
 import os
 import traceback
 
 from flask import Flask, abort, jsonify, render_template, request
+from google.cloud import tasks_v2
 from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -31,6 +33,11 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LIFF_EXCLUDE_ADD_ID = os.environ.get("LIFF_EXCLUDE_ADD_ID", "")
 LIFF_EXCLUDE_REMOVE_ID = os.environ.get("LIFF_EXCLUDE_REMOVE_ID", "")
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
+CLOUD_TASKS_PROJECT_ID = os.environ.get("CLOUD_TASKS_PROJECT_ID")
+CLOUD_TASKS_LOCATION = os.environ.get("CLOUD_TASKS_LOCATION")
+CLOUD_TASKS_QUEUE = os.environ.get("CLOUD_TASKS_QUEUE")
+IMMEDIATE_CHECK_TASK_URL = os.environ.get("IMMEDIATE_CHECK_TASK_URL", f"{APP_BASE_URL}/tasks/immediate-check" if APP_BASE_URL else "")
+IMMEDIATE_CHECK_TASK_SECRET = os.environ.get("IMMEDIATE_CHECK_TASK_SECRET", "")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
@@ -103,6 +110,36 @@ def api_remove_exceptions():
     removed_count = remove_exception_dates(user_id, decode_iso_dates(dates))
     return jsonify({"removed_count": removed_count})
 
+@app.route("/tasks/immediate-check", methods=["POST"])
+def task_immediate_check():
+    expected_secret = IMMEDIATE_CHECK_TASK_SECRET.strip()
+    if expected_secret and request.headers.get("X-Task-Secret", "").strip() != expected_secret:
+        abort(401)
+
+    payload = request.get_json(silent=True) or {}
+    user_id = payload.get("user_id")
+    line_user_id = payload.get("line_user_id")
+    if not user_id or not line_user_id:
+        abort(400)
+
+    try:
+        send_line_message(
+            get_notification_target_date(user_id),
+            line_user_id,
+            user_id,
+            set(get_exception_dates(user_id)),
+            compare_with_last=False,
+        )
+    except Exception as exc:
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        line_bot_api.push_message(
+            line_user_id,
+            TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
+        )
+
+    return ("", 204)
+
+
 
 @handler.add(FollowEvent)
 def handle_follow(event):
@@ -169,18 +206,12 @@ def handle_message(event):
             )
             line_bot_api.reply_message(event.reply_token, reply_msg)
             try:
-                send_line_message(
-                    get_notification_target_date(user_id),
-                    event.source.user_id,
-                    user_id,
-                    set(get_exception_dates(user_id)),
-                    compare_with_last=False,
-                )
+                enqueue_immediate_check(user_id, event.source.user_id)
             except Exception as exc:
                 traceback.print_exception(type(exc), exc, exc.__traceback__)
                 line_bot_api.push_message(
                     event.source.user_id,
-                    TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
+                    TextSendMessage(text="即時確認の受付に失敗しました。時間をおいてもう一度お試しください。"),
                 )
             return
     elif received_text == "登録情報確認":
@@ -328,6 +359,32 @@ def get_exception_dates(user_id):
         if row.get("date")
     ]
 
+
+
+def enqueue_immediate_check(user_id, line_user_id):
+    if not CLOUD_TASKS_PROJECT_ID or not IMMEDIATE_CHECK_TASK_URL:
+        raise RuntimeError("Cloud Tasks configuration is incomplete")
+
+    client = tasks_v2.CloudTasksClient()
+    parent = client.queue_path(CLOUD_TASKS_PROJECT_ID, CLOUD_TASKS_LOCATION, CLOUD_TASKS_QUEUE)
+
+    task = {
+        "http_request": {
+            "http_method": tasks_v2.HttpMethod.POST,
+            "url": IMMEDIATE_CHECK_TASK_URL,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps(
+                {
+                    "user_id": user_id,
+                    "line_user_id": line_user_id,
+                }
+            ).encode(),
+        }
+    }
+    if IMMEDIATE_CHECK_TASK_SECRET:
+        task["http_request"]["headers"]["X-Task-Secret"] = IMMEDIATE_CHECK_TASK_SECRET
+
+    client.create_task(parent=parent, task=task)
 
 
 def get_registration_summary(user_id):
