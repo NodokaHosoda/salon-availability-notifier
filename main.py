@@ -19,6 +19,8 @@ from linebot.models import (
     TextSendMessage,
 )
 from supabase import create_client
+from display_utils import decode_compact_datetimes, format_grouped_datetimes_for_display
+from notification_utils import clear_notification_state
 from scraper import send_line_message
 
 load_dotenv()
@@ -30,14 +32,15 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-LIFF_EXCLUDE_ADD_ID = os.environ.get("LIFF_EXCLUDE_ADD_ID", "")
-LIFF_EXCLUDE_REMOVE_ID = os.environ.get("LIFF_EXCLUDE_REMOVE_ID", "")
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
+LIFF_EXCLUDE_ADD_ID = os.environ.get("LIFF_EXCLUDE_ADD_ID")
+LIFF_EXCLUDE_REMOVE_ID = os.environ.get("LIFF_EXCLUDE_REMOVE_ID")
+LIFF_REGISTRATION_ID = os.environ.get("LIFF_REGISTRATION_ID")
+APP_BASE_URL = os.environ.get("APP_BASE_URL").rstrip("/")
 CLOUD_TASKS_PROJECT_ID = os.environ.get("CLOUD_TASKS_PROJECT_ID")
 CLOUD_TASKS_LOCATION = os.environ.get("CLOUD_TASKS_LOCATION")
 CLOUD_TASKS_QUEUE = os.environ.get("CLOUD_TASKS_QUEUE")
-IMMEDIATE_CHECK_TASK_URL = os.environ.get("IMMEDIATE_CHECK_TASK_URL", f"{APP_BASE_URL}/tasks/immediate-check" if APP_BASE_URL else "")
-IMMEDIATE_CHECK_TASK_SECRET = os.environ.get("IMMEDIATE_CHECK_TASK_SECRET", "")
+IMMEDIATE_CHECK_TASK_URL = os.environ.get("IMMEDIATE_CHECK_TASK_URL", f"{APP_BASE_URL}/tasks/immediate-check")
+IMMEDIATE_CHECK_TASK_SECRET = os.environ.get("IMMEDIATE_CHECK_TASK_SECRET")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
@@ -79,18 +82,32 @@ def liff_exclude_remove():
     )
 
 
+@app.route("/liff/registration-summary")
+def liff_registration_summary():
+    return render_template(
+        "liff_registration_summary.html",
+        liff_id=LIFF_REGISTRATION_ID,
+        page_title="登録情報を確認",
+        remove_url=build_liff_remove_url(),
+    )
+
+
 @app.route("/api/exceptions", methods=["GET"])
 def api_get_exceptions():
     user_id = get_user_id_from_request()
-    response = (
-        supabase.table("exceptions_date")
-        .select("date")
-        .eq("user_id", user_id)
-        .order("date")
-        .execute()
-    )
-    dates = [row["date"] for row in (response.data or []) if row.get("date")]
-    return jsonify({"dates": dates})
+    try:
+        response = (
+            supabase.table("exceptions_date")
+            .select("date")
+            .eq("user_id", user_id)
+            .order("date")
+            .execute()
+        )
+        dates = [row["date"] for row in (response.data or []) if row.get("date")]
+        return jsonify({"dates": dates})
+    except Exception as exc:
+        print(f"[api/exceptions:get] user_id={user_id} failed: {exc}")
+        return jsonify({"error": "除外日一覧の取得に失敗しました。"}), 500
 
 
 @app.route("/api/exceptions", methods=["POST"])
@@ -98,8 +115,12 @@ def api_add_exceptions():
     user_id = get_user_id_from_request()
     payload = request.get_json(silent=True) or {}
     dates = payload.get("dates", [])
-    saved_count = save_exception_dates(user_id, decode_iso_dates(dates))
-    return jsonify({"saved_count": saved_count})
+    try:
+        saved_count = save_exception_dates(user_id, decode_iso_dates(dates))
+        return jsonify({"saved_count": saved_count})
+    except Exception as exc:
+        print(f"[api/exceptions:add] user_id={user_id} dates={dates} failed: {exc}")
+        return jsonify({"error": "除外日の追加に失敗しました。"}), 500
 
 
 @app.route("/api/exceptions/remove", methods=["POST"])
@@ -107,8 +128,22 @@ def api_remove_exceptions():
     user_id = get_user_id_from_request()
     payload = request.get_json(silent=True) or {}
     dates = payload.get("dates", [])
-    removed_count = remove_exception_dates(user_id, decode_iso_dates(dates))
-    return jsonify({"removed_count": removed_count})
+    try:
+        removed_count = remove_exception_dates(user_id, decode_iso_dates(dates))
+        return jsonify({"removed_count": removed_count})
+    except Exception as exc:
+        print(f"[api/exceptions:remove] user_id={user_id} dates={dates} failed: {exc}")
+        return jsonify({"error": "除外日の解除に失敗しました。"}), 500
+
+@app.route("/api/registration-summary", methods=["GET"])
+def api_registration_summary():
+    user_id = get_user_id_from_request()
+    try:
+        return jsonify(get_registration_summary_payload(user_id))
+    except Exception as exc:
+        print(f"[api/registration-summary] user_id={user_id} failed: {exc}")
+        return jsonify({"error": "登録情報の取得に失敗しました。"}), 500
+
 
 @app.route("/tasks/immediate-check", methods=["POST"])
 def task_immediate_check():
@@ -215,7 +250,25 @@ def handle_message(event):
                 )
             return
     elif received_text == "登録情報確認":
-        reply_msg = TextSendMessage(text=get_registration_summary(user_id))
+        registration_url = build_liff_registration_url()
+        if not registration_url:
+            reply_msg = TextSendMessage(text=get_registration_summary(user_id))
+        else:
+            reply_msg = TemplateSendMessage(
+                alt_text="登録情報の確認画面を開きます。",
+                template={
+                    "type": "buttons",
+                    "title": "登録情報を確認",
+                    "text": "通知状態、除外日時、最新の空き状況を確認できます。",
+                    "actions": [
+                        {
+                            "type": "uri",
+                            "label": "画面を開く",
+                            "uri": registration_url,
+                        }
+                    ],
+                },
+            )
     elif received_text == "除外日を解除":
         remove_url = build_liff_remove_url()
         if not remove_url:
@@ -271,12 +324,7 @@ def handle_postback(event):
             template=data["template"],
         )
     elif action == "stop":
-        (
-            supabase.table("notification_setting")
-            .update({"get_notification": False, "last_date": None, "last_available_dates": None})
-            .eq("user_id", user_id)
-            .execute()
-        )
+        clear_notification_state(user_id)
         reply_msg = TextSendMessage(text="通知を停止しました。")
     elif action == "confirm_start":
         update_last_date(user_id, selected_date)
@@ -333,7 +381,7 @@ def update_last_date(user_id, new_date):
 def get_notification_settings(user_id):
     response = (
         supabase.table("notification_setting")
-        .select("last_date,get_notification")
+        .select("last_date,get_notification,last_available_dates")
         .eq("user_id", user_id)
         .execute()
     )
@@ -387,24 +435,37 @@ def enqueue_immediate_check(user_id, line_user_id):
     client.create_task(parent=parent, task=task)
 
 
+def get_registration_summary_payload(user_id):
+    notification_row = get_notification_settings(user_id)
+    return {
+        "notification_enabled": bool(notification_row.get("get_notification")),
+        "last_date": notification_row.get("last_date"),
+        "exception_dates": [dt.isoformat() for dt in get_exception_dates(user_id)],
+        "latest_available_dates": decode_compact_datetimes(notification_row.get("last_available_dates") or []),
+    }
+
+
 def get_registration_summary(user_id):
-    is_enabled = is_notification_enabled(user_id)
-    last_date = get_notification_target_date(user_id)
+    payload = get_registration_summary_payload(user_id)
 
-    exception_dates = get_exception_dates(user_id)
+    lines = [f"通知状態: {'ON' if payload['notification_enabled'] else 'OFF'}"]
+    if payload["notification_enabled"]:
+        lines.append(f"通知期限日: {payload['last_date'] or '未設定'}")
 
-    lines = [f"通知状態: {'ON' if is_enabled else 'OFF'}"]
-    if is_enabled:
-        lines.append(f"通知期限日: {last_date or '未設定'}")
-
-    if exception_dates:
+    if payload["exception_dates"]:
         lines.append("除外日時:")
-        for date in exception_dates:
-            lines.append(f"- {format_iso_for_display(date.isoformat())}")
+        lines.extend(format_grouped_datetimes_for_display(payload["exception_dates"], include_bullet=True))
     else:
         lines.append("除外日時: なし")
 
+    if payload["latest_available_dates"]:
+        lines.append("最新の空き状況:")
+        lines.extend(format_grouped_datetimes_for_display(payload["latest_available_dates"], include_bullet=True))
+    else:
+        lines.append("最新の空き状況: なし")
+
     return "\n".join(lines)
+
 
 def decode_iso_dates(date_values):
     decoded_dates = []
@@ -463,11 +524,12 @@ def build_liff_remove_url():
     return f"{APP_BASE_URL}/liff/exclude-remove"
 
 
-def format_iso_for_display(value):
-    dt_obj = datetime.fromisoformat(value)
-    weekdays = ["月", "火", "水", "木", "金", "土", "日"]
-    weekday = weekdays[dt_obj.weekday()]
-    return dt_obj.strftime(f"%Y年%m月%d日（{weekday}）%H:%M")
+def build_liff_registration_url():
+    if not APP_BASE_URL:
+        return None
+    return f"{APP_BASE_URL}/liff/registration-summary"
+
+
 
 
 set_notification_date = {
