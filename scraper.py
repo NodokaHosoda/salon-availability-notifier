@@ -11,8 +11,7 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 from supabase import create_client
 
-from display_utils import encode_compact_datetimes, format_grouped_datetimes_for_display, serialize_compact_datetimes
-from notification_utils import clear_notification_state
+from utils import clear_notification_state, encode_compact_datetimes, format_grouped_datetimes_for_display, serialize_compact_datetimes
 
 load_dotenv()
 load_dotenv(dotenv_path=Path.home() / ".env", override=False)
