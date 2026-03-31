@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 from supabase import create_client
 
+from utils import clear_notification_state, encode_compact_datetimes, format_grouped_datetimes_for_display, serialize_compact_datetimes
+
 load_dotenv()
 load_dotenv(dotenv_path=Path.home() / ".env", override=False)
 
@@ -24,6 +26,7 @@ MENU_ENTRY_TEXT = "空席確認・予約する"
 COURSE_TEXT = "12月1日から2200円。カットのみ"
 AVAILABILITY_MESSAGE_PREFIX = "空きがあります！\n"
 NO_AVAILABILITY_MESSAGE_SUFFIX = " までの空きはありません。"
+REQUEST_TIMEOUT_SECONDS = 10
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -58,7 +61,7 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     )
     loop.close()
 
-    available_dates = serialize_available_dates(raw_available_dates)
+    available_dates = serialize_compact_datetimes(raw_available_dates)
     if compare_with_last:
         previous_available_dates = get_last_available_dates(user_db_id) or []
         if available_dates == previous_available_dates:
@@ -74,9 +77,21 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
         "to": line_user_id,
         "messages": [{"type": "text", "text": message}],
     }
-    response = requests.post(push_url, headers=headers, data=json.dumps(body))
-    print("Status:", response.status_code)
-    print(response.json())
+    try:
+        response = requests.post(
+            push_url,
+            headers=headers,
+            data=json.dumps(body),
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        print(f"[line_push] user_id={user_db_id} status={response.status_code}")
+        try:
+            print(response.json())
+        except ValueError:
+            print(response.text)
+    except requests.RequestException as exc:
+        print(f"[line_push] user_id={user_db_id} failed: {exc}")
+        return
 
     if not response.ok:
         return
@@ -87,9 +102,20 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     if message.startswith(AVAILABILITY_MESSAGE_PREFIX) and new_exceptions:
         prompt_body = create_exclusion_prompt(line_user_id, new_exceptions)
         if prompt_body:
-            prompt_response = requests.post(push_url, headers=headers, data=json.dumps(prompt_body))
-            print("Prompt status:", prompt_response.status_code)
-            print(prompt_response.json())
+            try:
+                prompt_response = requests.post(
+                    push_url,
+                    headers=headers,
+                    data=json.dumps(prompt_body),
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+                print(f"[line_push:prompt] user_id={user_db_id} status={prompt_response.status_code}")
+                try:
+                    print(prompt_response.json())
+                except ValueError:
+                    print(prompt_response.text)
+            except requests.RequestException as exc:
+                print(f"[line_push:prompt] user_id={user_db_id} failed: {exc}")
 
 
 async def check_availability(request_date, exception_dates=None):
@@ -153,7 +179,6 @@ async def check_availability(request_date, exception_dates=None):
 
 
 async def create_available_date_list(elements, request_deadline, exception_set):
-    text = ""
     exception_list = []
     raw_available_dates = []
     seen_datetimes = set()
@@ -186,9 +211,8 @@ async def create_available_date_list(elements, request_deadline, exception_set):
         if dt_obj in exception_set:
             continue
 
-        text += f"{format_date_for_display(date_str)} {format_time_for_display(time_str)}\n"
         exception_list.append(dt_obj)
-    return text, exception_list, raw_available_dates
+    return format_grouped_datetimes_for_display(exception_list, as_text=True), exception_list, raw_available_dates
 
 
 def save_exception_dates(user_db_id, exception_list):
@@ -246,40 +270,13 @@ def build_liff_add_url(exception_list):
     if not APP_BASE_URL:
         return None
 
-    encoded_dates = encode_exception_dates(exception_list)
+    encoded_dates = encode_compact_datetimes(exception_list)
     candidate_url = f"{APP_BASE_URL}/liff/exclude-add?dates={quote(encoded_dates)}"
     if len(candidate_url) > 1800:
         return None
     return candidate_url
 
 
-def serialize_available_dates(exception_list):
-    unique_dates = sorted(set(exception_list))
-    return [dt.strftime("%Y%m%d%H%M") for dt in unique_dates]
-
-
-def encode_exception_dates(exception_list):
-    return ",".join(serialize_available_dates(exception_list))
-
-
-def format_date_for_display(date_str):
-    weekdays = [
-        "月",
-        "火",
-        "水",
-        "木",
-        "金",
-        "土",
-        "日",
-    ]
-    date_obj = datetime.strptime(date_str, "%Y%m%d")
-    weekday = weekdays[date_obj.weekday()]
-    return date_obj.strftime(f"%Y年%m月%d日（{weekday}）")
-
-
-def format_time_for_display(time_str):
-    time_obj = datetime.strptime(time_str, "%H%M")
-    return time_obj.strftime("%H:%M")
 
 
 def convert_to_ymd(date_str):
@@ -309,21 +306,21 @@ if __name__ == "__main__":
             continue
 
         if datetime.strptime(request_date, "%Y-%m-%d").date() < (datetime.now(timezone.utc) + timedelta(hours=9)).date():
-            (
-                supabase.table("notification_setting")
-                .update({"get_notification": False, "last_available_dates": None})
-                .eq("user_id", row["user_id"])
-                .execute()
-            )
+            clear_notification_state(row["user_id"])
             continue
         line_user_id = row["user_info"]["line_user_id"]
         user_db_id = row["user_id"]
-        exception_response = (
-            supabase.table("exceptions_date").select("date").eq("user_id", user_db_id).execute()
-        )
-        exception_dates = [
-            datetime.fromisoformat(item["date"])
-            for item in (exception_response.data or [])
-            if item.get("date")
-        ]
-        send_line_message(request_date, line_user_id, user_db_id, set(exception_dates))
+        try:
+            exception_response = (
+                supabase.table("exceptions_date").select("date").eq("user_id", user_db_id).execute()
+            )
+            exception_dates = [
+                datetime.fromisoformat(item["date"])
+                for item in (exception_response.data or [])
+                if item.get("date")
+            ]
+            send_line_message(request_date, line_user_id, user_db_id, set(exception_dates))
+        except Exception as exc:
+            print(
+                f"[scraper:user_loop] user_id={user_db_id} line_user_id={line_user_id} request_date={request_date} failed: {exc}"
+            )
