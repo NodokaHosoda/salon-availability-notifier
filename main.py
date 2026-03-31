@@ -19,8 +19,7 @@ from linebot.models import (
     TextSendMessage,
 )
 from supabase import create_client
-from display_utils import decode_compact_datetimes, format_grouped_datetimes_for_display
-from notification_utils import clear_notification_state
+from utils import clear_notification_state, decode_compact_datetimes, format_grouped_datetimes_for_display
 from scraper import send_line_message
 
 load_dotenv()
