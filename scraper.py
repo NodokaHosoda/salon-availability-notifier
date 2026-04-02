@@ -11,7 +11,14 @@ from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 from supabase import create_client
 
-from utils import clear_notification_state, encode_compact_datetimes, format_grouped_datetimes_for_display, serialize_compact_datetimes
+from utils import (
+    clear_notification_state,
+    encode_compact_datetimes,
+    format_date_only_for_display,
+    format_grouped_datetimes_for_display,
+    format_time_for_display,
+    serialize_compact_datetimes,
+)
 
 load_dotenv()
 load_dotenv(dotenv_path=Path.home() / ".env", override=False)
@@ -52,6 +59,84 @@ def update_last_available_dates(user_db_id, available_dates):
     )
 
 
+def create_line_message_payload(message, available_dates=None):
+    if not available_dates:
+        return {"type": "text", "text": message}
+
+    grouped_dates = {}
+    for dt_obj in sorted(available_dates):
+        date_label = format_date_only_for_display(dt_obj)
+        grouped_dates.setdefault(date_label, []).append(format_time_for_display(dt_obj))
+
+    sections = []
+    for date_label, times in grouped_dates.items():
+        sections.append(
+            {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "sm",
+                "margin": "lg",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": date_label,
+                        "weight": "bold",
+                        "size": "sm",
+                        "wrap": True,
+                        "color": "#1F1F1F",
+                    },
+                    {
+                        "type": "text",
+                        "text": "  ".join(times),
+                        "size": "sm",
+                        "wrap": True,
+                        "color": "#6B655D",
+                    },
+                ],
+            }
+        )
+
+    return {
+        "type": "flex",
+        "altText": message,
+        "contents": {
+            "type": "bubble",
+            "size": "giga",
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "md",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "空きがあります",
+                        "weight": "bold",
+                        "size": "xl",
+                        "color": "#A7482F",
+                    },
+                    {
+                        "type": "text",
+                        "text": f"{len(available_dates)}件の候補が見つかりました。",
+                        "size": "sm",
+                        "wrap": True,
+                        "color": "#6B655D",
+                    },
+                    {
+                        "type": "separator",
+                        "margin": "md",
+                    },
+                    {
+                        "type": "box",
+                        "layout": "vertical",
+                        "spacing": "sm",
+                        "contents": sections,
+                    },
+                ],
+            },
+        },
+    }
+
+
 def send_line_message(request_date, line_user_id, user_db_id, exception_dates=None, compare_with_last=True):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -75,7 +160,7 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     }
     body = {
         "to": line_user_id,
-        "messages": [{"type": "text", "text": message}],
+        "messages": [create_line_message_payload(message, new_exceptions)],
     }
     try:
         response = requests.post(
