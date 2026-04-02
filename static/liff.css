@@ -114,18 +114,63 @@ h1 {
   line-height: 1.5;
 }
 
-.time-select {
+.time-dropdown {
   width: 100%;
+}
+
+.time-dropdown.disabled {
+  opacity: 0.55;
+}
+
+.time-dropdown-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #fffdf9;
   color: var(--ink);
   font: inherit;
+  cursor: pointer;
+  list-style: none;
 }
 
-.time-select:disabled {
-  opacity: 0.55;
+.time-dropdown-summary::-webkit-details-marker {
+  display: none;
+}
+
+.time-dropdown-count {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.time-dropdown-menu {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fffdf9;
+}
+
+.time-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.time-option-checkbox {
+  width: 18px;
+  height: 18px;
+}
+
+.time-option-text {
+  color: var(--ink);
+  font-size: 14px;
 }
 
 .primary {
