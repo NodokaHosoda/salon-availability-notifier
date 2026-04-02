@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 import asyncio
 import json
@@ -13,7 +13,6 @@ from supabase import create_client
 
 from utils import (
     clear_notification_state,
-    encode_compact_datetimes,
     format_date_only_for_display,
     format_grouped_datetimes_for_display,
     format_time_for_display,
@@ -24,7 +23,6 @@ load_dotenv()
 load_dotenv(dotenv_path=Path.home() / ".env", override=False)
 
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
 TASK_URL = os.environ.get("TASK_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -50,26 +48,56 @@ def get_last_available_dates(user_db_id):
     return response.data[0].get("last_available_dates")
 
 
-def update_last_available_dates(user_db_id, available_dates):
+def update_last_available_dates(user_db_id, visible_available_dates):
     (
         supabase.table("notification_setting")
-        .update({"last_available_dates": available_dates})
+        .update({"last_available_dates": visible_available_dates})
         .eq("user_id", user_db_id)
         .execute()
     )
 
 
-def create_line_message_payload(message, available_dates=None):
+def create_line_message_payload(message, available_dates=None, new_available_dates=None):
     if not available_dates:
         return {"type": "text", "text": message}
 
+    highlighted_dates = set(new_available_dates or [])
     grouped_dates = {}
     for dt_obj in sorted(available_dates):
         date_label = format_date_only_for_display(dt_obj)
-        grouped_dates.setdefault(date_label, []).append(format_time_for_display(dt_obj))
+        grouped_dates.setdefault(date_label, []).append(
+            {
+                "compact": dt_obj.strftime("%Y%m%d%H%M"),
+                "time": format_time_for_display(dt_obj),
+            }
+        )
 
     sections = []
-    for date_label, times in grouped_dates.items():
+    for date_label, items in grouped_dates.items():
+        time_contents = []
+        for index, item in enumerate(items):
+            is_new = item["compact"] in highlighted_dates
+            time_contents.append(
+                {
+                    "type": "text",
+                    "text": item["time"],
+                    "size": "sm",
+                    "weight": "bold" if is_new else "regular",
+                    "color": "#A7482F" if is_new else "#6B655D",
+                    "flex": 0,
+                }
+            )
+            if index < len(items) - 1:
+                time_contents.append(
+                    {
+                        "type": "text",
+                        "text": "  ",
+                        "size": "sm",
+                        "color": "#6B655D",
+                        "flex": 0,
+                    }
+                )
+
         sections.append(
             {
                 "type": "box",
@@ -86,11 +114,11 @@ def create_line_message_payload(message, available_dates=None):
                         "color": "#1F1F1F",
                     },
                     {
-                        "type": "text",
-                        "text": "  ".join(times),
-                        "size": "sm",
+                        "type": "box",
+                        "layout": "baseline",
+                        "spacing": "none",
                         "wrap": True,
-                        "color": "#6B655D",
+                        "contents": time_contents,
                     },
                 ],
             }
@@ -146,11 +174,14 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     )
     loop.close()
 
-    available_dates = serialize_compact_datetimes(raw_available_dates)
+    visible_available_dates = serialize_compact_datetimes(new_exceptions)
+    new_available_dates = visible_available_dates
     if compare_with_last:
         previous_available_dates = get_last_available_dates(user_db_id) or []
-        if available_dates == previous_available_dates:
-            print("No change in availability, skipping notification.")
+        new_available_dates = sorted(set(visible_available_dates) - set(previous_available_dates))
+        if not new_available_dates:
+            print("No newly added availability, skipping notification.")
+            update_last_available_dates(user_db_id, visible_available_dates)
             return
 
     push_url = "https://api.line.me/v2/bot/message/push"
@@ -160,7 +191,7 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     }
     body = {
         "to": line_user_id,
-        "messages": [create_line_message_payload(message, new_exceptions)],
+        "messages": [create_line_message_payload(message, new_exceptions, new_available_dates)],
     }
     try:
         response = requests.post(
@@ -181,26 +212,7 @@ def send_line_message(request_date, line_user_id, user_db_id, exception_dates=No
     if not response.ok:
         return
 
-    if compare_with_last:
-        update_last_available_dates(user_db_id, available_dates)
-        
-    if message.startswith(AVAILABILITY_MESSAGE_PREFIX) and new_exceptions:
-        prompt_body = create_exclusion_prompt(line_user_id, new_exceptions)
-        if prompt_body:
-            try:
-                prompt_response = requests.post(
-                    push_url,
-                    headers=headers,
-                    data=json.dumps(prompt_body),
-                    timeout=REQUEST_TIMEOUT_SECONDS,
-                )
-                print(f"[line_push:prompt] user_id={user_db_id} status={prompt_response.status_code}")
-                try:
-                    print(prompt_response.json())
-                except ValueError:
-                    print(prompt_response.text)
-            except requests.RequestException as exc:
-                print(f"[line_push:prompt] user_id={user_db_id} failed: {exc}")
+    update_last_available_dates(user_db_id, visible_available_dates)
 
 
 async def check_availability(request_date, exception_dates=None):
@@ -298,69 +310,6 @@ async def create_available_date_list(elements, request_deadline, exception_set):
 
         exception_list.append(dt_obj)
     return format_grouped_datetimes_for_display(exception_list, as_text=True), exception_list, raw_available_dates
-
-
-def save_exception_dates(user_db_id, exception_list):
-    if not exception_list:
-        return
-
-    existing_response = (
-        supabase.table("exceptions_date").select("date").eq("user_id", user_db_id).execute()
-    )
-    existing_dates = {
-        datetime.fromisoformat(row["date"])
-        for row in (existing_response.data or [])
-        if row.get("date")
-    }
-    payload = [
-        {"user_id": user_db_id, "date": dt.isoformat()}
-        for dt in exception_list
-        if dt not in existing_dates
-    ]
-    if payload:
-        supabase.table("exceptions_date").insert(payload).execute()
-
-
-def create_exclusion_prompt(line_user_id, exception_list):
-    liff_url = build_liff_add_url(exception_list)
-    if not liff_url:
-        return None
-
-    return {
-        "to": line_user_id,
-        "messages": [
-            {
-                "type": "template",
-                "altText": "通知した日付を除外対象に追加できます",
-                "template": {
-                    "type": "buttons",
-                    "title": "通知した日付の除外",
-                    "text": (
-                        "上記の日付を通知対象から除外する場合は画面を開いてください。"
-                    ),
-                    "actions": [
-                        {
-                            "type": "uri",
-                            "label": "除外する",
-                            "uri": liff_url,
-                        }
-                    ],
-                },
-            }
-        ],
-    }
-
-
-def build_liff_add_url(exception_list):
-    if not APP_BASE_URL:
-        return None
-
-    encoded_dates = encode_compact_datetimes(exception_list)
-    candidate_url = f"{APP_BASE_URL}/liff/exclude-add?dates={quote(encoded_dates)}"
-    if len(candidate_url) > 1800:
-        return None
-    return candidate_url
-
 
 
 

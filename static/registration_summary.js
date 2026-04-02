@@ -5,8 +5,6 @@
   const metaEl = document.getElementById("summary-meta");
   const exceptionDatesEl = document.getElementById("exception-dates");
   const latestAvailableDatesEl = document.getElementById("latest-available-dates");
-  const changeDateButtonEl = document.getElementById("change-date-button");
-  const removeExceptionLinkEl = document.getElementById("remove-exception-link");
   const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
 
   function setStatus(message, isError) {
@@ -18,15 +16,7 @@
     summaryViewEl.classList.toggle("hidden", !show);
   }
 
-  function isPreviewMode() {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("preview") === "1" || ["localhost", "127.0.0.1"].includes(window.location.hostname);
-  }
-
   async function initLiff() {
-    if (isPreviewMode()) {
-      return "__preview__";
-    }
     if (!config.liffId) {
       throw new Error("LIFF ID が設定されていません。");
     }
@@ -111,44 +101,7 @@
     });
   }
 
-  function bindActions(userId) {
-    if (removeExceptionLinkEl) {
-      if (config.removeUrl) {
-        removeExceptionLinkEl.href = config.removeUrl;
-      } else {
-        removeExceptionLinkEl.classList.add("disabled-link");
-        removeExceptionLinkEl.setAttribute("aria-disabled", "true");
-      }
-    }
-
-    if (!changeDateButtonEl) {
-      return;
-    }
-
-    changeDateButtonEl.addEventListener("click", async () => {
-      if (userId === "__preview__") {
-        setStatus("プレビューでは日付変更メッセージは送信されません。");
-        return;
-      }
-      try {
-        await liff.sendMessages([{ type: "text", text: "日付変更" }]);
-        setStatus("LINEに「日付変更」を送信しました。トーク画面で日付を選択してください。");
-      } catch (error) {
-        setStatus("日付変更メッセージの送信に失敗しました。LINEトークから「日付変更」を送信してください。", true);
-      }
-    });
-  }
-
   async function loadSummary(userId) {
-    if (userId === "__preview__") {
-      return {
-        notification_enabled: true,
-        last_date: "2099-12-31",
-        exception_dates: ["2099-12-20T11:00:00", "2099-12-20T13:30:00", "2099-12-22T15:00:00"],
-        latest_available_dates: ["2099-12-24T10:00:00", "2099-12-24T14:30:00", "2099-12-25T18:00:00"],
-      };
-    }
-
     const response = await fetch("/api/registration-summary", {
       headers: {
         "X-Line-User-Id": userId,
@@ -169,9 +122,8 @@
     const payload = await loadSummary(userId);
     renderMeta(payload);
     renderGroupedList(exceptionDatesEl, payload.exception_dates, "登録済みの除外日時はありません。");
-    renderGroupedList(latestAvailableDatesEl, payload.latest_available_dates, "最新の空き状況はありません。");
-    bindActions(userId);
-    setStatus(userId === "__preview__" ? "プレビュー表示です。" : "最新の登録情報を表示しています。");
+    renderGroupedList(latestAvailableDatesEl, payload.latest_available_dates, "空きはありません。");
+    setStatus("最新の登録情報を表示しています。");
     showSummary(true);
   } catch (error) {
     setStatus(error.message || "登録情報の読み込みに失敗しました。", true);

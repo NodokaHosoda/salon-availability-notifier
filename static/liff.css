@@ -190,6 +190,10 @@ h1 {
   cursor: default;
 }
 
+.form-return {
+  margin-top: 16px;
+}
+
 @media (max-width: 640px) {
   .shell {
     padding: 12px;

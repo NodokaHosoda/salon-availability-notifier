@@ -4,6 +4,7 @@
   const formEl = document.getElementById("selection-form");
   const listEl = document.getElementById("date-list");
   const submitButton = document.getElementById("submit-button");
+  let backButtonEl = null;
   const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
 
   function setStatus(message, isError) {
@@ -15,14 +16,19 @@
     formEl.classList.toggle("hidden", !show);
   }
 
-  function formatDisplay(isoString) {
-    const date = new Date(isoString);
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    const hh = String(date.getHours()).padStart(2, "0");
-    const mi = String(date.getMinutes()).padStart(2, "0");
-    return `${yyyy}年${mm}月${dd}日（${weekdays[date.getDay()]}）${hh}:${mi}`;
+  function showBackButton(show) {
+    if (!backButtonEl) {
+      backButtonEl = document.createElement("button");
+      backButtonEl.type = "button";
+      backButtonEl.className = "secondary form-return hidden";
+      backButtonEl.textContent = config.mode === "add" ? "除外日追加画面に戻る" : "除外日解除画面に戻る";
+      backButtonEl.addEventListener("click", () => {
+        window.location.reload();
+      });
+      formEl.insertAdjacentElement("afterend", backButtonEl);
+    }
+
+    backButtonEl.classList.toggle("hidden", !show);
   }
 
   function formatDateLabel(dateKey) {
@@ -38,18 +44,6 @@
     const hh = String(date.getHours()).padStart(2, "0");
     const mi = String(date.getMinutes()).padStart(2, "0");
     return `${hh}:${mi}`;
-  }
-
-  function getEncodedDatesFromQuery() {
-    const params = new URLSearchParams(window.location.search);
-    const encoded = params.get("dates");
-    if (!encoded) {
-      return [];
-    }
-    return encoded
-      .split(",")
-      .filter(Boolean)
-      .map((value) => `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(8, 10)}:${value.slice(10, 12)}:00`);
   }
 
   function unique(values) {
@@ -68,11 +62,6 @@
         groups.get(dateKey).push(value);
       });
     return Array.from(groups.entries()).map(([dateKey, times]) => ({ dateKey, times }));
-  }
-
-  function isPreviewMode() {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("preview") === "1" || ["localhost", "127.0.0.1"].includes(window.location.hostname);
   }
 
   function renderDates(dateValues) {
@@ -105,10 +94,6 @@
       if (times.length > 1) {
         const picker = document.createElement("div");
         picker.className = "time-picker";
-
-        const dropdownLabel = document.createElement("p");
-        dropdownLabel.className = "time-label";
-        dropdownLabel.textContent = "時間帯を複数選択";
 
         const dropdown = document.createElement("details");
         dropdown.className = "time-dropdown";
@@ -191,7 +176,6 @@
           }
         });
 
-        picker.appendChild(dropdownLabel);
         dropdown.appendChild(summary);
         dropdown.appendChild(menu);
         picker.appendChild(dropdown);
@@ -234,12 +218,6 @@
   }
 
   async function initLiff() {
-    if (isPreviewMode()) {
-      return "__preview__";
-    }
-    if (!config.liffId) {
-      throw new Error("LIFF ID が設定されていません。");
-    }
     await liff.init({ liffId: config.liffId });
     if (!liff.isLoggedIn()) {
       liff.login();
@@ -251,18 +229,18 @@
 
   async function loadDates(userId) {
     if (config.mode === "add") {
-      const addDates = unique(getEncodedDatesFromQuery());
-      if (addDates.length > 0) {
-        return addDates;
+      const response = await fetch("/api/registration-summary", {
+        headers: {
+          "X-Line-User-Id": userId,
+        },
+      });
+      if (!response.ok) {
+        throw new Error("最新の空き状況の取得に失敗しました。");
       }
-      if (userId === "__preview__") {
-        return ["2099-12-24T10:00:00", "2099-12-24T14:30:00", "2099-12-25T18:00:00"];
-      }
-      return [];
-    }
-
-    if (userId === "__preview__") {
-      return ["2099-12-20T11:00:00", "2099-12-20T13:30:00", "2099-12-22T15:00:00"];
+      const payload = await response.json();
+      const latestAvailableDates = unique(payload.latest_available_dates || []);
+      const exceptionDates = new Set(unique(payload.exception_dates || []));
+      return latestAvailableDates.filter((value) => !exceptionDates.has(value));
     }
 
     const response = await fetch("/api/exceptions", {
@@ -278,12 +256,6 @@
   }
 
   async function submitDates(userId, dates) {
-    if (userId === "__preview__") {
-      return config.mode === "add"
-        ? { saved_count: dates.length }
-        : { removed_count: dates.length };
-    }
-
     const endpoint = config.mode === "add" ? "/api/exceptions" : "/api/exceptions/remove";
     const response = await fetch(endpoint, {
       method: "POST",
@@ -306,17 +278,15 @@
     }
 
     const dates = await loadDates(userId);
-    if (userId === "__preview__") {
-      setStatus("プレビュー表示です。送信処理はローカルでは実行されません。");
-    }
     if (dates.length === 0) {
       setStatus(config.mode === "add" ? "今回追加できる候補はありません。" : "現在、登録済みの除外日はありません。");
       showForm(false);
+      showBackButton(false);
       return;
     }
 
     renderDates(dates);
-    setStatus("日付を選ぶとその日の全時間帯、未選択ならドロップダウン内で時間帯を複数選択できます。");
+    setStatus(config.mode === "add" ? "現在空きのある日時から、通知の除外対象に追加したい日時を選択してください。" : "解除したい日時を選択してください。");
     showForm(true);
 
     formEl.addEventListener("submit", async (event) => {
@@ -342,9 +312,11 @@
         setStatus(`${payload.removed_count}件の除外日を解除しました。`);
       }
       showForm(false);
+      showBackButton(true);
     });
   } catch (error) {
     setStatus(error.message || "画面の初期化に失敗しました。", true);
     showForm(false);
+    showBackButton(false);
   }
 })();
