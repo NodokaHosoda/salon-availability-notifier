@@ -14,35 +14,26 @@
     <section class="panel">
       <p class="eyebrow">LIFF</p>
       <h1>登録情報を確認</h1>
-      <p class="intro">通知状態、通知期限日、除外日時、最新の空き状況をまとめて確認できます。</p>
       <div id="status" class="status">読み込み中...</div>
       <div id="summary-view" class="summary-view hidden">
-        <section class="summary-section">
-          <h2>操作</h2>
-          <div class="action-links">
-            <button id="change-date-button" class="secondary" type="button">通知期限日を変更</button>
-            <a id="remove-exception-link" class="secondary" href="#">除外日を解除</a>
-          </div>
-        </section>
         <section class="summary-section">
           <h2>通知設定</h2>
           <dl id="summary-meta" class="summary-meta"></dl>
         </section>
         <section class="summary-section">
-          <h2>除外日時</h2>
-          <div id="exception-dates" class="summary-lines"></div>
-        </section>
-        <section class="summary-section">
           <h2>最新の空き状況</h2>
           <div id="latest-available-dates" class="summary-lines"></div>
+        </section>
+        <section class="summary-section">
+          <h2>除外日時</h2>
+          <div id="exception-dates" class="summary-lines"></div>
         </section>
       </div>
     </section>
   </main>
   <script>
     window.appConfig = {
-      liffId: "{{ liff_id }}",
-      removeUrl: {{ (remove_url or "")|tojson }}
+      liffId: "{{ liff_id }}"
     };
   </script>
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>

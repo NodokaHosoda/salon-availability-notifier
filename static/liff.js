@@ -106,43 +106,95 @@
         const picker = document.createElement("div");
         picker.className = "time-picker";
 
-        const selectLabel = document.createElement("label");
-        selectLabel.htmlFor = `time-select-${index}`;
-        selectLabel.className = "time-label";
-        selectLabel.textContent = "時間帯を1つ選択";
+        const dropdownLabel = document.createElement("p");
+        dropdownLabel.className = "time-label";
+        dropdownLabel.textContent = "時間帯を複数選択";
 
-        const select = document.createElement("select");
-        select.id = `time-select-${index}`;
-        select.className = "time-select";
-        select.dataset.dateKey = dateKey;
+        const dropdown = document.createElement("details");
+        dropdown.className = "time-dropdown";
 
-        const placeholder = document.createElement("option");
-        placeholder.value = "";
-        placeholder.textContent = "選択してください";
-        select.appendChild(placeholder);
+        const summary = document.createElement("summary");
+        summary.className = "time-dropdown-summary";
 
-        times.forEach((value) => {
-          const option = document.createElement("option");
-          option.value = value;
-          option.textContent = formatTimeLabel(value);
-          select.appendChild(option);
+        const summaryText = document.createElement("span");
+        summaryText.className = "time-dropdown-text";
+        summaryText.textContent = "時間帯を選択";
+
+        const summaryCount = document.createElement("span");
+        summaryCount.className = "time-dropdown-count";
+
+        summary.appendChild(summaryText);
+        summary.appendChild(summaryCount);
+
+        const menu = document.createElement("div");
+        menu.className = "time-dropdown-menu";
+
+        const optionCheckboxes = [];
+
+        function updateDropdownState() {
+          const selected = optionCheckboxes.filter((checkbox) => checkbox.checked);
+          if (selected.length === 0) {
+            summaryText.textContent = "時間帯を選択";
+            summaryCount.textContent = "";
+            return;
+          }
+
+          const labels = selected.map((checkbox) => formatTimeLabel(checkbox.value));
+          summaryText.textContent = labels.slice(0, 2).join(", ");
+          summaryCount.textContent = selected.length > 2 ? ` 他${selected.length - 2}件` : "";
+        }
+
+        times.forEach((value, timeIndex) => {
+          const optionLabel = document.createElement("label");
+          optionLabel.className = "time-option";
+          optionLabel.htmlFor = `time-${index}-${timeIndex}`;
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.id = `time-${index}-${timeIndex}`;
+          checkbox.className = "time-option-checkbox";
+          checkbox.value = value;
+
+          const optionText = document.createElement("span");
+          optionText.className = "time-option-text";
+          optionText.textContent = formatTimeLabel(value);
+
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) {
+              input.checked = false;
+            }
+            updateDropdownState();
+          });
+
+          optionCheckboxes.push(checkbox);
+          optionLabel.appendChild(checkbox);
+          optionLabel.appendChild(optionText);
+          menu.appendChild(optionLabel);
         });
 
         input.addEventListener("change", () => {
-          select.disabled = input.checked;
           if (input.checked) {
-            select.value = "";
+            optionCheckboxes.forEach((checkbox) => {
+              checkbox.checked = false;
+            });
+            dropdown.open = false;
+            dropdown.classList.add("disabled");
+          } else {
+            dropdown.classList.remove("disabled");
+          }
+          updateDropdownState();
+        });
+
+        summary.addEventListener("click", (event) => {
+          if (dropdown.classList.contains("disabled")) {
+            event.preventDefault();
           }
         });
 
-        select.addEventListener("change", () => {
-          if (select.value) {
-            input.checked = false;
-          }
-        });
-
-        picker.appendChild(selectLabel);
-        picker.appendChild(select);
+        picker.appendChild(dropdownLabel);
+        dropdown.appendChild(summary);
+        dropdown.appendChild(menu);
+        picker.appendChild(dropdown);
         card.appendChild(picker);
       } else {
         const singleTime = document.createElement("p");
@@ -160,24 +212,22 @@
 
     listEl.querySelectorAll(".date-card").forEach((card) => {
       const dateToggle = card.querySelector(".date-toggle");
-      const timeSelect = card.querySelector(".time-select");
-      const timeOptions = timeSelect
-        ? Array.from(timeSelect.options)
-            .map((option) => option.value)
-            .filter(Boolean)
-        : [];
+      const timeCheckboxes = Array.from(card.querySelectorAll(".time-option-checkbox"));
 
       if (dateToggle && dateToggle.checked) {
-        selectedDates.push(...timeOptions);
-        if (timeOptions.length === 0 && card.dataset.singleValue) {
+        if (timeCheckboxes.length > 0) {
+          selectedDates.push(...timeCheckboxes.map((checkbox) => checkbox.value));
+        } else if (card.dataset.singleValue) {
           selectedDates.push(card.dataset.singleValue);
         }
         return;
       }
 
-      if (timeSelect && timeSelect.value) {
-        selectedDates.push(timeSelect.value);
-      }
+      timeCheckboxes.forEach((checkbox) => {
+        if (checkbox.checked) {
+          selectedDates.push(checkbox.value);
+        }
+      });
     });
 
     return unique(selectedDates);
@@ -266,7 +316,7 @@
     }
 
     renderDates(dates);
-    setStatus("日付を選ぶとその日の全時間帯、未選択ならプルダウンで個別時間を選べます。");
+    setStatus("日付を選ぶとその日の全時間帯、未選択ならドロップダウン内で時間帯を複数選択できます。");
     showForm(true);
 
     formEl.addEventListener("submit", async (event) => {

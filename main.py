@@ -19,7 +19,7 @@ from linebot.models import (
     TextSendMessage,
 )
 from supabase import create_client
-from utils import clear_notification_state, decode_compact_datetimes, format_grouped_datetimes_for_display
+from utils import clear_notification_state, decode_compact_datetimes
 from scraper import send_line_message
 
 load_dotenv()
@@ -87,7 +87,6 @@ def liff_registration_summary():
         "liff_registration_summary.html",
         liff_id=LIFF_REGISTRATION_ID,
         page_title="登録情報を確認",
-        remove_url=build_liff_remove_url(),
     )
 
 
@@ -227,7 +226,7 @@ def handle_message(event):
             return
         reply_msg = TemplateSendMessage(
             alt_text="変更したい日付を選択してください。",
-            template=modify_date["template"],
+            template=create_modify_date_template(user_id),
         )
     elif received_text == "即時確認":
         if not is_notification_enabled(user_id):
@@ -248,46 +247,6 @@ def handle_message(event):
                     TextSendMessage(text="即時確認の受付に失敗しました。時間をおいてもう一度お試しください。"),
                 )
             return
-    elif received_text == "登録情報確認":
-        registration_url = build_liff_registration_url()
-        if not registration_url:
-            reply_msg = TextSendMessage(text=get_registration_summary(user_id))
-        else:
-            reply_msg = TemplateSendMessage(
-                alt_text="登録情報の確認画面を開きます。",
-                template={
-                    "type": "buttons",
-                    "title": "登録情報を確認",
-                    "text": "通知状態、除外日時、最新の空き状況を確認できます。",
-                    "actions": [
-                        {
-                            "type": "uri",
-                            "label": "画面を開く",
-                            "uri": registration_url,
-                        }
-                    ],
-                },
-            )
-    elif received_text == "除外日を解除":
-        remove_url = build_liff_remove_url()
-        if not remove_url:
-            reply_msg = TextSendMessage(text="除外解除用の LIFF URL が設定されていません。")
-        else:
-            reply_msg = TemplateSendMessage(
-                alt_text="除外日の解除画面を開きます。",
-                template={
-                    "type": "buttons",
-                    "title": "除外日を解除",
-                    "text": "登録済みの除外日から解除したい日時を選択してください。",
-                    "actions": [
-                        {
-                            "type": "uri",
-                            "label": "画面を開く",
-                            "uri": remove_url,
-                        }
-                    ],
-                },
-            )
     else:
         return
 
@@ -444,28 +403,6 @@ def get_registration_summary_payload(user_id):
     }
 
 
-def get_registration_summary(user_id):
-    payload = get_registration_summary_payload(user_id)
-
-    lines = [f"通知状態: {'ON' if payload['notification_enabled'] else 'OFF'}"]
-    if payload["notification_enabled"]:
-        lines.append(f"通知期限日: {payload['last_date'] or '未設定'}")
-
-    if payload["exception_dates"]:
-        lines.append("除外日時:")
-        lines.extend(format_grouped_datetimes_for_display(payload["exception_dates"], include_bullet=True))
-    else:
-        lines.append("除外日時: なし")
-
-    if payload["latest_available_dates"]:
-        lines.append("最新の空き状況:")
-        lines.extend(format_grouped_datetimes_for_display(payload["latest_available_dates"], include_bullet=True))
-    else:
-        lines.append("最新の空き状況: なし")
-
-    return "\n".join(lines)
-
-
 def decode_iso_dates(date_values):
     decoded_dates = []
     for value in date_values:
@@ -517,20 +454,6 @@ def remove_exception_dates(user_id, dates):
     return removed_count
 
 
-def build_liff_remove_url():
-    if not APP_BASE_URL:
-        return None
-    return f"{APP_BASE_URL}/liff/exclude-remove"
-
-
-def build_liff_registration_url():
-    if not APP_BASE_URL:
-        return None
-    return f"{APP_BASE_URL}/liff/registration-summary"
-
-
-
-
 set_notification_date = {
     "template": {
         "type": "buttons",
@@ -548,8 +471,8 @@ set_notification_date = {
 }
 
 
-modify_date = {
-    "template": {
+def create_modify_date_template(user_id):
+    template = {
         "type": "buttons",
         "title": "日付変更",
         "text": "変更したい日付を選択してください。",
@@ -562,7 +485,12 @@ modify_date = {
             }
         ],
     }
-}
+
+    current_date = get_notification_target_date(user_id)
+    if current_date:
+        template["actions"][0]["initial"] = current_date
+
+    return template
 
 
 stop_notification = {
