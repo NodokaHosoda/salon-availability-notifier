@@ -488,6 +488,7 @@ def create_modify_date_template(user_id):
 
     current_date = get_notification_target_date(user_id)
     if current_date:
+        template["text"] = f"現在の登録日付は {current_date} です。変更したい日付を選択してください。"
         template["actions"][0]["initial"] = current_date
 
     return template
