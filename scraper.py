@@ -117,7 +117,6 @@ def create_line_message_payload(message, available_dates=None, new_available_dat
                         "type": "box",
                         "layout": "baseline",
                         "spacing": "none",
-                        "wrap": True,
                         "contents": time_contents,
                     },
                 ],
