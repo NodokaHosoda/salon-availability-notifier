@@ -123,7 +123,7 @@
     renderMeta(payload);
     renderGroupedList(exceptionDatesEl, payload.exception_dates, "登録済みの除外日時はありません。");
     renderGroupedList(latestAvailableDatesEl, payload.latest_available_dates, "空きはありません。");
-    setStatus("最新の登録情報を表示しています。");
+    setStatus("");
     showSummary(true);
   } catch (error) {
     setStatus(error.message || "登録情報の読み込みに失敗しました。", true);
