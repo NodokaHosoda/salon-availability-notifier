@@ -286,7 +286,7 @@
     }
 
     renderDates(dates);
-    setStatus(config.mode === "add" ? "現在空きのある日時から、通知の除外対象に追加したい日時を選択してください。" : "");
+    setStatus("");
     showForm(true);
 
     formEl.addEventListener("submit", async (event) => {
