@@ -176,7 +176,31 @@ def task_immediate_check():
 
 @handler.add(FollowEvent)
 def handle_follow(event):
-    get_or_create_user(event.source.user_id)
+    line_user_id = event.source.user_id
+    response = (
+        supabase.table("user_info")
+        .select("id")
+        .eq("line_user_id", line_user_id)
+        .execute()
+    )
+
+    if not response.data:
+        response = (
+            supabase.table("user_info")
+            .insert({"line_user_id": line_user_id, "user_name": None})
+            .execute()
+        )
+        (
+            supabase.table("notification_setting")
+            .insert(
+                {
+                    "user_id": response.data[0]["id"],
+                    "last_date": None,
+                    "get_notification": False,
+                                    }
+            )
+            .execute()
+        )
 
 
 @handler.add(MessageEvent, message=TextMessage)
@@ -285,62 +309,17 @@ def get_user_id_from_request():
     return get_user_id_from_line_user_id(line_user_id)
 
 
-def find_user_id_from_line_user_id(line_user_id):
+def get_user_id_from_line_user_id(line_user_id):
     response = (
         supabase.table("user_info")
         .select("id")
         .eq("line_user_id", line_user_id)
+        .single()
         .execute()
     )
     if not response.data:
-        return None
-    return response.data[0]["id"]
-
-
-def get_user_id_from_line_user_id(line_user_id):
-    user_id = find_user_id_from_line_user_id(line_user_id)
-    if not user_id:
         abort(404)
-    return user_id
-
-
-def get_or_create_user(line_user_id):
-    user_id = find_user_id_from_line_user_id(line_user_id)
-    if user_id:
-        ensure_notification_setting(user_id)
-        return user_id
-
-    try:
-        response = (
-            supabase.table("user_info")
-            .insert({"line_user_id": line_user_id, "line_user_name": None})
-            .execute()
-        )
-        user_id = response.data[0]["id"]
-    except Exception:
-        user_id = find_user_id_from_line_user_id(line_user_id)
-        if not user_id:
-            raise
-
-    ensure_notification_setting(user_id)
-    return user_id
-
-
-def ensure_notification_setting(user_id):
-    response = (
-        supabase.table("notification_setting")
-        .select("user_id")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    if response.data:
-        return
-
-    (
-        supabase.table("notification_setting")
-        .insert({"user_id": user_id, "last_date": None, "get_notification": False})
-        .execute()
-    )
+    return response.data["id"]
 
 
 def is_notification_enabled(user_id):
