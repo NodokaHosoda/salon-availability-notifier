@@ -177,37 +177,53 @@ def task_immediate_check():
 @handler.add(FollowEvent)
 def handle_follow(event):
     line_user_id = event.source.user_id
-    response = (
-        supabase.table("user_info")
-        .select("id")
-        .eq("line_user_id", line_user_id)
-        .execute()
-    )
+    user_name = None
 
-    if not response.data:
-        user_name = None
-        try:
-            profile = line_bot_api.get_profile(line_user_id)
-            user_name = profile.display_name
-        except Exception:
-            user_name = None
+    try:
+        profile = line_bot_api.get_profile(line_user_id)
+        user_name = profile.display_name
+    except Exception as exc:
+        print(f"[follow] line_user_id={line_user_id} get_profile failed: {exc}")
 
+    try:
         response = (
             supabase.table("user_info")
             .insert({"line_user_id": line_user_id, "user_name": user_name})
             .execute()
         )
+    except Exception as exc:
+        error_message = str(exc)
+        if getattr(exc, "code", None) == "23505" or "duplicate key" in error_message:
+            print(f"[follow] line_user_id={line_user_id} user_name={user_name!r} already registered")
+            return
+        print(f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_info insert failed: {exc}")
+        raise
+
+    user_id = response.data[0]["id"]
+
+    try:
         (
             supabase.table("notification_setting")
             .insert(
                 {
-                    "user_id": response.data[0]["id"],
+                    "user_id": user_id,
                     "last_date": None,
                     "get_notification": False,
-                                    }
+                }
             )
             .execute()
         )
+    except Exception as exc:
+        print(
+            f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_id={user_id} notification_setting insert failed: {exc}"
+        )
+        try:
+            supabase.table("user_info").delete().eq("id", user_id).execute()
+        except Exception as rollback_exc:
+            print(
+                f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_id={user_id} user_info rollback failed: {rollback_exc}"
+            )
+        raise
 
 
 @handler.add(MessageEvent, message=TextMessage)
