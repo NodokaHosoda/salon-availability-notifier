@@ -182,7 +182,7 @@ def handle_follow(event):
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     received_text = event.message.text
-    user_id = get_or_create_user(event.source.user_id)
+    user_id = get_user_id_from_line_user_id(event.source.user_id)
 
     if received_text == "通知設定":
         if is_notification_enabled(user_id):
@@ -243,7 +243,7 @@ def handle_postback(event):
     if "action" in data_dict:
         action = data_dict["action"][0]
 
-    user_id = get_or_create_user(event.source.user_id)
+    user_id = get_user_id_from_line_user_id(event.source.user_id)
 
     if action == "start":
         data = create_start_msg(selected_date)
@@ -282,10 +282,10 @@ def get_user_id_from_request():
     line_user_id = request.headers.get("X-Line-User-Id", "").strip()
     if not line_user_id:
         abort(401)
-    return get_or_create_user(line_user_id)
+    return get_user_id_from_line_user_id(line_user_id)
 
 
-def get_user_id_from_line_user_id(line_user_id):
+def find_user_id_from_line_user_id(line_user_id):
     response = (
         supabase.table("user_info")
         .select("id")
@@ -297,8 +297,15 @@ def get_user_id_from_line_user_id(line_user_id):
     return response.data[0]["id"]
 
 
+def get_user_id_from_line_user_id(line_user_id):
+    user_id = find_user_id_from_line_user_id(line_user_id)
+    if not user_id:
+        abort(404)
+    return user_id
+
+
 def get_or_create_user(line_user_id):
-    user_id = get_user_id_from_line_user_id(line_user_id)
+    user_id = find_user_id_from_line_user_id(line_user_id)
     if user_id:
         ensure_notification_setting(user_id)
         return user_id
@@ -311,7 +318,7 @@ def get_or_create_user(line_user_id):
         )
         user_id = response.data[0]["id"]
     except Exception:
-        user_id = get_user_id_from_line_user_id(line_user_id)
+        user_id = find_user_id_from_line_user_id(line_user_id)
         if not user_id:
             raise
 
