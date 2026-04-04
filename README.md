@@ -18,15 +18,15 @@
 - **期限切れ時の状態整理**: 通知期限を過ぎた設定は停止し、関連する保持状態もまとめてクリアします。
 
 ## 主な構成
-- **[main.py](/workspaces/hotpepper-availability-watcher/main.py)**: Flask アプリ。LINE webhook、LIFF ページ、設定用 API、即時確認タスクの入口を持つ。
-- **[scraper.py](/workspaces/hotpepper-availability-watcher/scraper.py)**: 定期実行の runner。通知対象ユーザーを走査して通知処理を呼ぶ。
-- **[availability_checker.py](/workspaces/hotpepper-availability-watcher/availability_checker.py)**: Hot Pepper 側を巡回して空き枠を取得する。
-- **[availability_notifier.py](/workspaces/hotpepper-availability-watcher/availability_notifier.py)**: 通知本文の組み立て、差分判定、LINE push、last_available_dates 更新を担う。
-- **[repositories.py](/workspaces/hotpepper-availability-watcher/repositories.py)**: Supabase への永続化アクセスをまとめる。
-- **[registration_summary_service.py](/workspaces/hotpepper-availability-watcher/registration_summary_service.py)**: 登録情報確認 API 向けの payload を組み立てる。
-- **[line_templates.py](/workspaces/hotpepper-availability-watcher/line_templates.py)**: LINE の template message をまとめる。
-- **[config.py](/workspaces/hotpepper-availability-watcher/config.py)** / **[clients.py](/workspaces/hotpepper-availability-watcher/clients.py)**: env 読み込みと外部 client 生成をまとめる。
-- **[templates](/workspaces/hotpepper-availability-watcher/templates)** / **[static](/workspaces/hotpepper-availability-watcher/static)**: LIFF の画面とフロントエンド資産。
+- **[main.py](./main.py)**: Flask アプリ。LINE webhook、LIFF ページ、設定用 API、即時確認タスクの入口を持つ。
+- **[scraper.py](./scraper.py)**: 定期実行の runner。通知対象ユーザーを走査して通知処理を呼ぶ。
+- **[availability_checker.py](./availability_checker.py)**: Hot Pepper 側を巡回して空き枠を取得する。
+- **[availability_notifier.py](./availability_notifier.py)**: 通知本文の組み立て、差分判定、LINE push、last_available_dates 更新を担う。
+- **[repositories.py](./repositories.py)**: Supabase への永続化アクセスをまとめる。
+- **[registration_summary_service.py](./registration_summary_service.py)**: 登録情報確認 API 向けの payload を組み立てる。
+- **[line_templates.py](./line_templates.py)**: LINE の template message をまとめる。
+- **[config.py](./config.py)** / **[clients.py](./clients.py)**: env 読み込みと外部 client 生成をまとめる。
+- **[templates](./templates)** / **[static](./static)**: LIFF の画面とフロントエンド資産。
 
 
 ## 補足

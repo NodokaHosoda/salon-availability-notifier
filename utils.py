@@ -15,10 +15,6 @@ def serialize_compact_datetimes(values):
 
 
 
-def encode_compact_datetimes(values):
-    return ",".join(serialize_compact_datetimes(values))
-
-
 
 def decode_compact_datetimes(values):
     decoded = []
@@ -44,11 +40,6 @@ def format_time_for_display(value):
         return ensure_datetime(value).strftime("%H:%M")
     return datetime.strptime(value, "%H%M").strftime("%H:%M")
 
-
-
-def format_iso_for_display(value):
-    dt_obj = ensure_datetime(value)
-    return f"{format_date_only_for_display(dt_obj)}{dt_obj.strftime('%H:%M')}"
 
 
 
