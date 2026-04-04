@@ -185,9 +185,16 @@ def handle_follow(event):
     )
 
     if not response.data:
+        user_name = None
+        try:
+            profile = line_bot_api.get_profile(line_user_id)
+            user_name = profile.display_name
+        except Exception:
+            user_name = None
+
         response = (
             supabase.table("user_info")
-            .insert({"line_user_id": line_user_id, "user_name": None})
+            .insert({"line_user_id": line_user_id, "user_name": user_name})
             .execute()
         )
         (
