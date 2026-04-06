@@ -174,17 +174,14 @@ def task_immediate_check():
 
 
 
-@handler.add(FollowEvent)
-def handle_follow(event):
-    line_user_id = event.source.user_id
-    user_name = None
-
+def get_line_profile_name_or_none(line_user_id):
     try:
-        profile = line_bot_api.get_profile(line_user_id)
-        user_name = profile.display_name
-    except Exception as exc:
-        print(f"[follow] line_user_id={line_user_id} get_profile failed: {exc}")
+        return line_bot_api.get_profile(line_user_id).display_name
+    except Exception:
+        return None
 
+
+def insert_follow_user(line_user_id, user_name):
     try:
         response = (
             supabase.table("user_info")
@@ -195,12 +192,13 @@ def handle_follow(event):
         error_message = str(exc)
         if getattr(exc, "code", None) == "23505" or "duplicate key" in error_message:
             print(f"[follow] line_user_id={line_user_id} user_name={user_name!r} already registered")
-            return
+            return None
         print(f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_info insert failed: {exc}")
         raise
+    return response.data[0]["id"]
 
-    user_id = response.data[0]["id"]
 
+def create_follow_notification_setting(user_id, line_user_id, user_name):
     try:
         (
             supabase.table("notification_setting")
@@ -217,12 +215,33 @@ def handle_follow(event):
         print(
             f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_id={user_id} notification_setting insert failed: {exc}"
         )
-        try:
-            supabase.table("user_info").delete().eq("id", user_id).execute()
-        except Exception as rollback_exc:
-            print(
-                f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_id={user_id} user_info rollback failed: {rollback_exc}"
-            )
+        raise
+
+
+def rollback_follow_user(user_id, line_user_id, user_name):
+    try:
+        supabase.table("user_info").delete().eq("id", user_id).execute()
+    except Exception as rollback_exc:
+        print(
+            f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_id={user_id} user_info rollback failed: {rollback_exc}"
+        )
+
+
+@handler.add(FollowEvent)
+def handle_follow(event):
+    line_user_id = event.source.user_id
+    user_name = get_line_profile_name_or_none(line_user_id)
+    user_id = None
+
+    try:
+        user_id = insert_follow_user(line_user_id, user_name)
+        if user_id is None:
+            return
+        create_follow_notification_setting(user_id, line_user_id, user_name)
+    except Exception as exc:
+        if user_id is not None:
+            rollback_follow_user(user_id, line_user_id, user_name)
+        print(f"[follow_registration_failed] line_user_id={line_user_id} failed: {exc}")
         raise
 
 
