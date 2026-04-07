@@ -26,7 +26,7 @@ jobs:
           python -m playwright install
 
       - name: Run Playwright script
-        run: python scraper.py
+        run: python scheduled_notifier.py
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           TASK_URL: ${{ vars.TASK_URL }}

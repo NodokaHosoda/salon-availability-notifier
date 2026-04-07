@@ -1,49 +1,45 @@
 from datetime import datetime
 from urllib.parse import parse_qs
 import json
-from pathlib import Path
 import os
 import traceback
 
 from flask import Flask, abort, jsonify, render_template, request
 from google.cloud import tasks_v2
-from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     FollowEvent,
     MessageEvent,
     PostbackEvent,
-    TemplateSendMessage,
     TextMessage,
     TextSendMessage,
 )
-from supabase import create_client
-from utils import clear_notification_state, decode_compact_datetimes
-from scraper import send_line_message
 
-load_dotenv()
-load_dotenv(dotenv_path=Path.home() / ".env", override=False)
+from availability_notifier import check_and_send_availability
+from config import get_settings
+from line_templates import (
+    build_modify_confirmation_message,
+    build_modify_date_message,
+    build_set_notification_date_message,
+    build_start_confirmation_message,
+    build_stop_notification_message,
+)
+from repositories import (
+    exception_date_repository,
+    notification_setting_repository,
+    user_info_repository,
+)
+from utils import decode_compact_datetimes
+
+settings = get_settings()
+line_bot_api = LineBotApi(settings.line_channel_access_token)
+handler = WebhookHandler(settings.line_channel_secret)
 
 app = Flask(__name__)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET")
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-LIFF_EXCLUDE_ADD_ID = os.environ.get("LIFF_EXCLUDE_ADD_ID")
-LIFF_EXCLUDE_REMOVE_ID = os.environ.get("LIFF_EXCLUDE_REMOVE_ID")
-LIFF_REGISTRATION_ID = os.environ.get("LIFF_REGISTRATION_ID")
-APP_BASE_URL = os.environ.get("APP_BASE_URL").rstrip("/")
-CLOUD_TASKS_PROJECT_ID = os.environ.get("CLOUD_TASKS_PROJECT_ID")
-CLOUD_TASKS_LOCATION = os.environ.get("CLOUD_TASKS_LOCATION")
-CLOUD_TASKS_QUEUE = os.environ.get("CLOUD_TASKS_QUEUE")
-IMMEDIATE_CHECK_TASK_URL = os.environ.get("IMMEDIATE_CHECK_TASK_URL", f"{APP_BASE_URL}/tasks/immediate-check")
-IMMEDIATE_CHECK_TASK_SECRET = os.environ.get("IMMEDIATE_CHECK_TASK_SECRET")
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
+NORMALIZED_APP_BASE_URL = settings.app_base_url.rstrip("/")
+IMMEDIATE_CHECK_TASK_URL = f"{NORMALIZED_APP_BASE_URL}/tasks/immediate-check"
 
 
 @app.route("/")
@@ -55,7 +51,6 @@ def index():
 def callback():
     signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
-    print("Request body:", body)
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
@@ -67,7 +62,7 @@ def callback():
 def liff_exclude_add():
     return render_template(
         "liff_exclude_add.html",
-        liff_id=LIFF_EXCLUDE_ADD_ID,
+        liff_id=settings.liff_exclude_add_id,
         page_title="除外日を追加",
     )
 
@@ -76,7 +71,7 @@ def liff_exclude_add():
 def liff_exclude_remove():
     return render_template(
         "liff_exclude_remove.html",
-        liff_id=LIFF_EXCLUDE_REMOVE_ID,
+        liff_id=settings.liff_exclude_remove_id,
         page_title="除外日を解除",
     )
 
@@ -85,23 +80,16 @@ def liff_exclude_remove():
 def liff_registration_summary():
     return render_template(
         "liff_registration_summary.html",
-        liff_id=LIFF_REGISTRATION_ID,
+        liff_id=settings.liff_registration_id,
         page_title="登録情報を確認",
     )
 
 
 @app.route("/api/exceptions", methods=["GET"])
 def api_get_exceptions():
-    user_id = get_user_id_from_request()
+    user_id = require_user_id_from_request()
     try:
-        response = (
-            supabase.table("exceptions_date")
-            .select("date")
-            .eq("user_id", user_id)
-            .order("date")
-            .execute()
-        )
-        dates = [row["date"] for row in (response.data or []) if row.get("date")]
+        dates = [dt.isoformat() for dt in exception_date_repository.list_dates(user_id)]
         return jsonify({"dates": dates})
     except Exception as exc:
         print(f"[api/exceptions:get] user_id={user_id} failed: {exc}")
@@ -110,11 +98,11 @@ def api_get_exceptions():
 
 @app.route("/api/exceptions", methods=["POST"])
 def api_add_exceptions():
-    user_id = get_user_id_from_request()
+    user_id = require_user_id_from_request()
     payload = request.get_json(silent=True) or {}
     dates = payload.get("dates", [])
     try:
-        saved_count = save_exception_dates(user_id, decode_iso_dates(dates))
+        saved_count = exception_date_repository.save_dates(user_id, decode_iso_dates(dates))
         return jsonify({"saved_count": saved_count})
     except Exception as exc:
         print(f"[api/exceptions:add] user_id={user_id} dates={dates} failed: {exc}")
@@ -123,21 +111,22 @@ def api_add_exceptions():
 
 @app.route("/api/exceptions/remove", methods=["POST"])
 def api_remove_exceptions():
-    user_id = get_user_id_from_request()
+    user_id = require_user_id_from_request()
     payload = request.get_json(silent=True) or {}
     dates = payload.get("dates", [])
     try:
-        removed_count = remove_exception_dates(user_id, decode_iso_dates(dates))
+        removed_count = exception_date_repository.remove_dates(user_id, decode_iso_dates(dates))
         return jsonify({"removed_count": removed_count})
     except Exception as exc:
         print(f"[api/exceptions:remove] user_id={user_id} dates={dates} failed: {exc}")
         return jsonify({"error": "除外日の解除に失敗しました。"}), 500
 
+
 @app.route("/api/registration-summary", methods=["GET"])
 def api_registration_summary():
-    user_id = get_user_id_from_request()
+    user_id = require_user_id_from_request()
     try:
-        return jsonify(get_registration_summary_payload(user_id))
+        return jsonify(build_registration_summary_payload(user_id))
     except Exception as exc:
         print(f"[api/registration-summary] user_id={user_id} failed: {exc}")
         return jsonify({"error": "登録情報の取得に失敗しました。"}), 500
@@ -145,7 +134,7 @@ def api_registration_summary():
 
 @app.route("/tasks/immediate-check", methods=["POST"])
 def task_immediate_check():
-    expected_secret = IMMEDIATE_CHECK_TASK_SECRET.strip()
+    expected_secret = settings.immediate_check_task_secret.strip()
     if expected_secret and request.headers.get("X-Task-Secret", "").strip() != expected_secret:
         abort(401)
 
@@ -156,11 +145,12 @@ def task_immediate_check():
         abort(400)
 
     try:
-        send_line_message(
-            get_notification_target_date(user_id),
+        # 即時確認は通常の送信経路を使うが、差分がない場合の通知抑止は行わない。
+        check_and_send_availability(
+            notification_setting_repository.get_last_date(user_id),
             line_user_id,
             user_id,
-            set(get_exception_dates(user_id)),
+            set(exception_date_repository.list_dates(user_id)),
             compare_with_last=False,
         )
     except Exception as exc:
@@ -173,6 +163,14 @@ def task_immediate_check():
     return ("", 204)
 
 
+@handler.add(FollowEvent)
+def handle_follow(event):
+    line_user_id = event.source.user_id
+    user_info_repository.get_or_create_user(
+        line_user_id,
+        get_line_profile_name_or_none(line_user_id),
+    )
+
 
 def get_line_profile_name_or_none(line_user_id):
     try:
@@ -181,118 +179,61 @@ def get_line_profile_name_or_none(line_user_id):
         return None
 
 
-def insert_follow_user(line_user_id, user_name):
+def build_notification_not_enabled_message():
+    return TextSendMessage(text="通知が有効になっていません。まずは通知を開始してください。")
+
+
+def handle_notification_setting_message(event, user_id):
+    if notification_setting_repository.is_enabled(user_id):
+        reply_msg = build_stop_notification_message()
+    else:
+        reply_msg = build_set_notification_date_message()
+    line_bot_api.reply_message(event.reply_token, reply_msg)
+
+
+def handle_modify_date_message_command(event, user_id):
+    if not notification_setting_repository.is_enabled(user_id):
+        line_bot_api.reply_message(event.reply_token, build_notification_not_enabled_message())
+        return
+
+    reply_msg = build_modify_date_message(notification_setting_repository.get_last_date(user_id))
+    line_bot_api.reply_message(event.reply_token, reply_msg)
+
+
+def handle_immediate_check_message(event, user_id):
+    if not notification_setting_repository.is_enabled(user_id):
+        line_bot_api.reply_message(event.reply_token, build_notification_not_enabled_message())
+        return
+
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text="現在の空き状況を確認しています。"),
+    )
     try:
-        response = (
-            supabase.table("user_info")
-            .insert({"line_user_id": line_user_id, "user_name": user_name})
-            .execute()
-        )
+        enqueue_immediate_check(user_id, event.source.user_id)
     except Exception as exc:
-        error_message = str(exc)
-        if getattr(exc, "code", None) == "23505" or "duplicate key" in error_message:
-            print(f"[follow] line_user_id={line_user_id} user_name={user_name!r} already registered")
-            return None
-        print(f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_info insert failed: {exc}")
-        raise
-    return response.data[0]["id"]
-
-
-def create_follow_notification_setting(user_id, line_user_id, user_name):
-    try:
-        (
-            supabase.table("notification_setting")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "last_date": None,
-                    "get_notification": False,
-                }
-            )
-            .execute()
-        )
-    except Exception as exc:
-        print(
-            f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_id={user_id} notification_setting insert failed: {exc}"
-        )
-        raise
-
-
-def rollback_follow_user(user_id, line_user_id, user_name):
-    try:
-        supabase.table("user_info").delete().eq("id", user_id).execute()
-    except Exception as rollback_exc:
-        print(
-            f"[follow] line_user_id={line_user_id} user_name={user_name!r} user_id={user_id} user_info rollback failed: {rollback_exc}"
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        line_bot_api.push_message(
+            event.source.user_id,
+            TextSendMessage(text="即時確認の受付に失敗しました。時間をおいてもう一度お試しください。"),
         )
 
 
-@handler.add(FollowEvent)
-def handle_follow(event):
-    line_user_id = event.source.user_id
-    user_name = get_line_profile_name_or_none(line_user_id)
-    user_id = None
-
-    try:
-        user_id = insert_follow_user(line_user_id, user_name)
-        if user_id is None:
-            return
-        create_follow_notification_setting(user_id, line_user_id, user_name)
-    except Exception as exc:
-        if user_id is not None:
-            rollback_follow_user(user_id, line_user_id, user_name)
-        print(f"[follow_registration_failed] line_user_id={line_user_id} failed: {exc}")
-        raise
+MESSAGE_HANDLERS = {
+    "通知設定": handle_notification_setting_message,
+    "日付変更": handle_modify_date_message_command,
+    "即時確認": handle_immediate_check_message,
+}
 
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    received_text = event.message.text
-    user_id = get_user_id_from_line_user_id(event.source.user_id)
-
-    if received_text == "通知設定":
-        if is_notification_enabled(user_id):
-            reply_msg = TemplateSendMessage(
-                alt_text="通知を停止しますか？",
-                template=stop_notification["template"],
-            )
-        else:
-            reply_msg = TemplateSendMessage(
-                alt_text="通知したい期限日を選択してください。",
-                template=set_notification_date["template"],
-            )
-    elif received_text == "日付変更":
-        if not is_notification_enabled(user_id):
-            reply_msg = TextSendMessage(text="通知が有効になっていません。まずは通知を開始してください。")
-            line_bot_api.reply_message(event.reply_token, reply_msg)
-            return
-        reply_msg = TemplateSendMessage(
-            alt_text="変更したい日付を選択してください。",
-            template=create_modify_date_template(user_id),
-        )
-    elif received_text == "即時確認":
-        if not is_notification_enabled(user_id):
-            reply_msg = TextSendMessage(
-                text="通知が有効になっていません。まずは通知を開始してください。"
-            )
-        else:
-            reply_msg = TextSendMessage(
-                text="現在の空き状況を確認しています。"
-            )
-            line_bot_api.reply_message(event.reply_token, reply_msg)
-            try:
-                enqueue_immediate_check(user_id, event.source.user_id)
-            except Exception as exc:
-                traceback.print_exception(type(exc), exc, exc.__traceback__)
-                line_bot_api.push_message(
-                    event.source.user_id,
-                    TextSendMessage(text="即時確認の受付に失敗しました。時間をおいてもう一度お試しください。"),
-                )
-            return
-    else:
+    message_handler = MESSAGE_HANDLERS.get(event.message.text)
+    if not message_handler:
         return
 
-    line_bot_api.reply_message(event.reply_token, reply_msg)
+    user_id = require_user_id_from_line_user_id(event.source.user_id)
+    message_handler(event, user_id)
 
 
 @handler.add(PostbackEvent)
@@ -303,40 +244,29 @@ def handle_postback(event):
     if event.postback.params:
         selected_date = event.postback.params.get("date")
 
+    # datetimepicker の値は params に入り、confirm 系の操作は data 文字列側に入る。
     data_dict = parse_qs(event.postback.data)
     if "date" in data_dict:
         selected_date = data_dict["date"][0]
     if "action" in data_dict:
         action = data_dict["action"][0]
 
-    user_id = get_user_id_from_line_user_id(event.source.user_id)
+    user_id = require_user_id_from_line_user_id(event.source.user_id)
 
     if action == "start":
-        data = create_start_msg(selected_date)
-        reply_msg = TemplateSendMessage(
-            alt_text=data["altText"],
-            template=data["template"],
-        )
+        reply_msg = build_start_confirmation_message(selected_date)
     elif action == "modify":
-        data = create_modify_msg(selected_date)
-        reply_msg = TemplateSendMessage(
-            alt_text=data["altText"],
-            template=data["template"],
-        )
+        reply_msg = build_modify_confirmation_message(selected_date)
     elif action == "stop":
-        clear_notification_state(user_id)
+        notification_setting_repository.clear_state(user_id)
+        exception_date_repository.clear_dates(user_id)
         reply_msg = TextSendMessage(text="通知を停止しました。")
     elif action == "confirm_start":
-        update_last_date(user_id, selected_date)
-        (
-            supabase.table("notification_setting")
-            .update({"get_notification": True})
-            .eq("user_id", user_id)
-            .execute()
-        )
+        notification_setting_repository.update_last_date(user_id, selected_date)
+        notification_setting_repository.set_enabled(user_id, True)
         reply_msg = TextSendMessage(text=f"{selected_date} までの空き情報の通知を開始しました。")
     elif action == "confirm_modify":
-        update_last_date(user_id, selected_date)
+        notification_setting_repository.update_last_date(user_id, selected_date)
         reply_msg = TextSendMessage(text=f"通知対象日を {selected_date} に変更しました。")
     else:
         reply_msg = TextSendMessage(text="操作を処理できませんでした。")
@@ -344,78 +274,37 @@ def handle_postback(event):
     line_bot_api.reply_message(event.reply_token, reply_msg)
 
 
-def get_user_id_from_request():
+
+def require_user_id_from_request():
+    # LIFF / API では転送されたヘッダーから対象の LINE ユーザーを特定し、存在しなければここで失敗させる。
     line_user_id = request.headers.get("X-Line-User-Id", "").strip()
     if not line_user_id:
         abort(401)
-    return get_user_id_from_line_user_id(line_user_id)
+    return require_user_id_from_line_user_id(line_user_id)
 
 
-def get_user_id_from_line_user_id(line_user_id):
-    response = (
-        supabase.table("user_info")
-        .select("id")
-        .eq("line_user_id", line_user_id)
-        .single()
-        .execute()
-    )
-    if not response.data:
+
+def require_user_id_from_line_user_id(line_user_id):
+    # 404 への変換をここに寄せて、各 handler 側では業務分岐だけを見る。
+    user_id = user_info_repository.get_user_id(line_user_id)
+    if not user_id:
         abort(404)
-    return response.data["id"]
-
-
-def is_notification_enabled(user_id):
-    notification_row = get_notification_settings(user_id)
-    return bool(notification_row.get("get_notification"))
-
-
-def update_last_date(user_id, new_date):
-    (
-        supabase.table("notification_setting")
-        .update({"last_date": new_date})
-        .eq("user_id", user_id)
-        .execute()
-    )
-
-
-def get_notification_settings(user_id):
-    response = (
-        supabase.table("notification_setting")
-        .select("last_date,get_notification,last_available_dates")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    return response.data[0] if response.data else {}
-
-
-def get_notification_target_date(user_id):
-    notification_row = get_notification_settings(user_id)
-    return notification_row.get("last_date")
-
-
-def get_exception_dates(user_id):
-    response = (
-        supabase.table("exceptions_date")
-        .select("date")
-        .eq("user_id", user_id)
-        .order("date")
-        .execute()
-    )
-    return [
-        datetime.fromisoformat(row["date"])
-        for row in (response.data or [])
-        if row.get("date")
-    ]
+    return user_id
 
 
 
 def enqueue_immediate_check(user_id, line_user_id):
-    if not CLOUD_TASKS_PROJECT_ID or not IMMEDIATE_CHECK_TASK_URL:
+    if not settings.cloud_tasks_project_id:
         raise RuntimeError("Cloud Tasks configuration is incomplete")
 
     client = tasks_v2.CloudTasksClient()
-    parent = client.queue_path(CLOUD_TASKS_PROJECT_ID, CLOUD_TASKS_LOCATION, CLOUD_TASKS_QUEUE)
+    parent = client.queue_path(
+        settings.cloud_tasks_project_id,
+        settings.cloud_tasks_location,
+        settings.cloud_tasks_queue,
+    )
 
+    # ユーザー起点の即時確認も Cloud Tasks 経由に寄せて、同じバックエンド経路で実行する。
     task = {
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
@@ -429,20 +318,24 @@ def enqueue_immediate_check(user_id, line_user_id):
             ).encode(),
         }
     }
-    if IMMEDIATE_CHECK_TASK_SECRET:
-        task["http_request"]["headers"]["X-Task-Secret"] = IMMEDIATE_CHECK_TASK_SECRET
+    if settings.immediate_check_task_secret:
+        task["http_request"]["headers"]["X-Task-Secret"] = settings.immediate_check_task_secret
 
     client.create_task(parent=parent, task=task)
 
 
-def get_registration_summary_payload(user_id):
-    notification_row = get_notification_settings(user_id)
+
+def build_registration_summary_payload(user_id):
+    notification_row = notification_setting_repository.get_settings(user_id)
     return {
         "notification_enabled": bool(notification_row.get("get_notification")),
         "last_date": notification_row.get("last_date"),
-        "exception_dates": [dt.isoformat() for dt in get_exception_dates(user_id)],
-        "latest_available_dates": decode_compact_datetimes(notification_row.get("last_available_dates") or []),
+        "exception_dates": [dt.isoformat() for dt in exception_date_repository.list_dates(user_id)],
+        "latest_available_dates": decode_compact_datetimes(
+            notification_row.get("last_available_dates") or []
+        ),
     }
+
 
 
 def decode_iso_dates(date_values):
@@ -451,159 +344,6 @@ def decode_iso_dates(date_values):
         if value:
             decoded_dates.append(datetime.fromisoformat(value))
     return decoded_dates
-
-
-def save_exception_dates(user_id, dates):
-    unique_dates = sorted(set(dates))
-    if not unique_dates:
-        return 0
-
-    existing_response = (
-        supabase.table("exceptions_date")
-        .select("date")
-        .eq("user_id", user_id)
-        .execute()
-    )
-    existing_dates = {
-        datetime.fromisoformat(row["date"])
-        for row in (existing_response.data or [])
-        if row.get("date")
-    }
-    payload = [
-        {"user_id": user_id, "date": dt.isoformat()}
-        for dt in unique_dates
-        if dt not in existing_dates
-    ]
-    if not payload:
-        return 0
-
-    supabase.table("exceptions_date").insert(payload).execute()
-    return len(payload)
-
-
-def remove_exception_dates(user_id, dates):
-    unique_dates = sorted(set(dates))
-    removed_count = 0
-    for dt in unique_dates:
-        response = (
-            supabase.table("exceptions_date")
-            .delete()
-            .eq("user_id", user_id)
-            .eq("date", dt.isoformat())
-            .execute()
-        )
-        removed_count += len(response.data or [])
-    return removed_count
-
-
-set_notification_date = {
-    "template": {
-        "type": "buttons",
-        "title": "通知開始",
-        "text": "何日までの空き情報を確認したいか、日付を選択してください。",
-        "actions": [
-            {
-                "type": "datetimepicker",
-                "label": "日付を選択",
-                "data": "start",
-                "mode": "date",
-            }
-        ],
-    }
-}
-
-
-def create_modify_date_template(user_id):
-    template = {
-        "type": "buttons",
-        "title": "日付変更",
-        "text": "変更したい日付を選択してください。",
-        "actions": [
-            {
-                "type": "datetimepicker",
-                "label": "日付を選択",
-                "data": "modify",
-                "mode": "date",
-            }
-        ],
-    }
-
-    current_date = get_notification_target_date(user_id)
-    if current_date:
-        template["text"] = f"現在の登録日付は {current_date} です。変更したい日付を選択してください。"
-        template["actions"][0]["initial"] = current_date
-
-    return template
-
-
-stop_notification = {
-    "template": {
-        "type": "confirm",
-        "title": "通知停止",
-        "text": "通知を停止しますか？",
-        "actions": [
-            {
-                "type": "postback",
-                "label": "はい",
-                "text": "はい",
-                "data": "stop",
-            },
-            {
-                "type": "message",
-                "label": "いいえ",
-                "text": "いいえ",
-            },
-        ],
-    }
-}
-
-
-def create_modify_msg(selected_date):
-    return {
-        "altText": f"通知対象日を {selected_date} に変更しますか？",
-        "template": {
-            "type": "confirm",
-            "title": "日付変更",
-            "text": f"通知対象日を {selected_date} に変更しますか？",
-            "actions": [
-                {
-                    "type": "postback",
-                    "label": "はい",
-                    "text": "はい",
-                    "data": f"action=confirm_modify&date={selected_date}",
-                },
-                {
-                    "type": "message",
-                    "label": "いいえ",
-                    "text": "いいえ",
-                },
-            ],
-        },
-    }
-
-
-def create_start_msg(selected_date):
-    return {
-        "altText": f"{selected_date} までの空き情報の通知を開始しますか？",
-        "template": {
-            "type": "confirm",
-            "title": "通知開始",
-            "text": f"{selected_date} までの空き情報の通知を開始しますか？",
-            "actions": [
-                {
-                    "type": "postback",
-                    "label": "はい",
-                    "text": "はい",
-                    "data": f"action=confirm_start&date={selected_date}",
-                },
-                {
-                    "type": "message",
-                    "label": "いいえ",
-                    "text": "いいえ",
-                },
-            ],
-        },
-    }
 
 
 if __name__ == "__main__":
