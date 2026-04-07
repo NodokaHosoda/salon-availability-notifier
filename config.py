@@ -19,7 +19,6 @@ class Settings:
     cloud_tasks_project_id: str | None
     cloud_tasks_location: str | None
     cloud_tasks_queue: str | None
-    immediate_check_task_url: str | None
     immediate_check_task_secret: str | None
     task_url: str | None
 
@@ -44,7 +43,6 @@ def get_settings():
         cloud_tasks_project_id=os.environ.get("CLOUD_TASKS_PROJECT_ID"),
         cloud_tasks_location=os.environ.get("CLOUD_TASKS_LOCATION"),
         cloud_tasks_queue=os.environ.get("CLOUD_TASKS_QUEUE"),
-        immediate_check_task_url=os.environ.get("IMMEDIATE_CHECK_TASK_URL"),
         immediate_check_task_secret=os.environ.get("IMMEDIATE_CHECK_TASK_SECRET"),
         task_url=os.environ.get("TASK_URL"),
     )

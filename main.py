@@ -6,6 +6,7 @@ import traceback
 
 from flask import Flask, abort, jsonify, render_template, request
 from google.cloud import tasks_v2
+from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     FollowEvent,
@@ -16,7 +17,6 @@ from linebot.models import (
 )
 
 from availability_notifier import check_and_send_availability
-from clients import get_line_bot_api, get_webhook_handler
 from config import get_settings
 from line_templates import (
     build_modify_confirmation_message,
@@ -25,28 +25,21 @@ from line_templates import (
     build_start_confirmation_message,
     build_stop_notification_message,
 )
-from registration_summary_service import build_registration_summary_payload
 from repositories import (
-    clear_notification_state,
-    get_exception_dates,
-    get_notification_target_date,
-    get_or_create_user,
-    get_user_id_from_line_user_id,
-    is_notification_enabled,
-    remove_exception_dates,
-    save_exception_dates,
-    set_notification_enabled,
-    update_last_date,
+    exception_date_repository,
+    notification_setting_repository,
+    user_info_repository,
 )
+from utils import decode_compact_datetimes
 
 settings = get_settings()
-line_bot_api = get_line_bot_api()
-handler = get_webhook_handler()
+line_bot_api = LineBotApi(settings.line_channel_access_token)
+handler = WebhookHandler(settings.line_channel_secret)
 
 app = Flask(__name__)
 
 NORMALIZED_APP_BASE_URL = settings.app_base_url.rstrip("/")
-DEFAULT_IMMEDIATE_CHECK_TASK_URL = f"{NORMALIZED_APP_BASE_URL}/tasks/immediate-check"
+IMMEDIATE_CHECK_TASK_URL = f"{NORMALIZED_APP_BASE_URL}/tasks/immediate-check"
 
 
 @app.route("/")
@@ -96,7 +89,7 @@ def liff_registration_summary():
 def api_get_exceptions():
     user_id = require_user_id_from_request()
     try:
-        dates = [dt.isoformat() for dt in get_exception_dates(user_id)]
+        dates = [dt.isoformat() for dt in exception_date_repository.list_dates(user_id)]
         return jsonify({"dates": dates})
     except Exception as exc:
         print(f"[api/exceptions:get] user_id={user_id} failed: {exc}")
@@ -109,7 +102,7 @@ def api_add_exceptions():
     payload = request.get_json(silent=True) or {}
     dates = payload.get("dates", [])
     try:
-        saved_count = save_exception_dates(user_id, decode_iso_dates(dates))
+        saved_count = exception_date_repository.save_dates(user_id, decode_iso_dates(dates))
         return jsonify({"saved_count": saved_count})
     except Exception as exc:
         print(f"[api/exceptions:add] user_id={user_id} dates={dates} failed: {exc}")
@@ -122,7 +115,7 @@ def api_remove_exceptions():
     payload = request.get_json(silent=True) or {}
     dates = payload.get("dates", [])
     try:
-        removed_count = remove_exception_dates(user_id, decode_iso_dates(dates))
+        removed_count = exception_date_repository.remove_dates(user_id, decode_iso_dates(dates))
         return jsonify({"removed_count": removed_count})
     except Exception as exc:
         print(f"[api/exceptions:remove] user_id={user_id} dates={dates} failed: {exc}")
@@ -154,10 +147,10 @@ def task_immediate_check():
     try:
         # 即時確認は通常の送信経路を使うが、差分がない場合の通知抑止は行わない。
         check_and_send_availability(
-            get_notification_target_date(user_id),
+            notification_setting_repository.get_last_date(user_id),
             line_user_id,
             user_id,
-            set(get_exception_dates(user_id)),
+            set(exception_date_repository.list_dates(user_id)),
             compare_with_last=False,
         )
     except Exception as exc:
@@ -172,48 +165,75 @@ def task_immediate_check():
 
 @handler.add(FollowEvent)
 def handle_follow(event):
-    get_or_create_user(event.source.user_id)
+    line_user_id = event.source.user_id
+    user_info_repository.get_or_create_user(
+        line_user_id,
+        get_line_profile_name_or_none(line_user_id),
+    )
+
+
+def get_line_profile_name_or_none(line_user_id):
+    try:
+        return line_bot_api.get_profile(line_user_id).display_name
+    except Exception:
+        return None
+
+
+def build_notification_not_enabled_message():
+    return TextSendMessage(text="通知が有効になっていません。まずは通知を開始してください。")
+
+
+def handle_notification_setting_message(event, user_id):
+    if notification_setting_repository.is_enabled(user_id):
+        reply_msg = build_stop_notification_message()
+    else:
+        reply_msg = build_set_notification_date_message()
+    line_bot_api.reply_message(event.reply_token, reply_msg)
+
+
+def handle_modify_date_message_command(event, user_id):
+    if not notification_setting_repository.is_enabled(user_id):
+        line_bot_api.reply_message(event.reply_token, build_notification_not_enabled_message())
+        return
+
+    reply_msg = build_modify_date_message(notification_setting_repository.get_last_date(user_id))
+    line_bot_api.reply_message(event.reply_token, reply_msg)
+
+
+def handle_immediate_check_message(event, user_id):
+    if not notification_setting_repository.is_enabled(user_id):
+        line_bot_api.reply_message(event.reply_token, build_notification_not_enabled_message())
+        return
+
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text="現在の空き状況を確認しています。"),
+    )
+    try:
+        enqueue_immediate_check(user_id, event.source.user_id)
+    except Exception as exc:
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        line_bot_api.push_message(
+            event.source.user_id,
+            TextSendMessage(text="即時確認の受付に失敗しました。時間をおいてもう一度お試しください。"),
+        )
+
+
+MESSAGE_HANDLERS = {
+    "通知設定": handle_notification_setting_message,
+    "日付変更": handle_modify_date_message_command,
+    "即時確認": handle_immediate_check_message,
+}
 
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    received_text = event.message.text
-    user_id = require_user_id_from_line_user_id(event.source.user_id)
-
-    if received_text == "通知設定":
-        if is_notification_enabled(user_id):
-            reply_msg = build_stop_notification_message()
-        else:
-            reply_msg = build_set_notification_date_message()
-    elif received_text == "日付変更":
-        if not is_notification_enabled(user_id):
-            reply_msg = TextSendMessage(text="通知が有効になっていません。まずは通知を開始してください。")
-            line_bot_api.reply_message(event.reply_token, reply_msg)
-            return
-        reply_msg = build_modify_date_message(get_notification_target_date(user_id))
-    elif received_text == "即時確認":
-        if not is_notification_enabled(user_id):
-            reply_msg = TextSendMessage(
-                text="通知が有効になっていません。まずは通知を開始してください。"
-            )
-        else:
-            reply_msg = TextSendMessage(
-                text="現在の空き状況を確認しています。"
-            )
-            line_bot_api.reply_message(event.reply_token, reply_msg)
-            try:
-                enqueue_immediate_check(user_id, event.source.user_id)
-            except Exception as exc:
-                traceback.print_exception(type(exc), exc, exc.__traceback__)
-                line_bot_api.push_message(
-                    event.source.user_id,
-                    TextSendMessage(text="即時確認の受付に失敗しました。時間をおいてもう一度お試しください。"),
-                )
-            return
-    else:
+    message_handler = MESSAGE_HANDLERS.get(event.message.text)
+    if not message_handler:
         return
 
-    line_bot_api.reply_message(event.reply_token, reply_msg)
+    user_id = require_user_id_from_line_user_id(event.source.user_id)
+    message_handler(event, user_id)
 
 
 @handler.add(PostbackEvent)
@@ -238,14 +258,15 @@ def handle_postback(event):
     elif action == "modify":
         reply_msg = build_modify_confirmation_message(selected_date)
     elif action == "stop":
-        clear_notification_state(user_id)
+        notification_setting_repository.clear_state(user_id)
+        exception_date_repository.clear_dates(user_id)
         reply_msg = TextSendMessage(text="通知を停止しました。")
     elif action == "confirm_start":
-        update_last_date(user_id, selected_date)
-        set_notification_enabled(user_id, True)
+        notification_setting_repository.update_last_date(user_id, selected_date)
+        notification_setting_repository.set_enabled(user_id, True)
         reply_msg = TextSendMessage(text=f"{selected_date} までの空き情報の通知を開始しました。")
     elif action == "confirm_modify":
-        update_last_date(user_id, selected_date)
+        notification_setting_repository.update_last_date(user_id, selected_date)
         reply_msg = TextSendMessage(text=f"通知対象日を {selected_date} に変更しました。")
     else:
         reply_msg = TextSendMessage(text="操作を処理できませんでした。")
@@ -265,7 +286,7 @@ def require_user_id_from_request():
 
 def require_user_id_from_line_user_id(line_user_id):
     # 404 への変換をここに寄せて、各 handler 側では業務分岐だけを見る。
-    user_id = get_user_id_from_line_user_id(line_user_id)
+    user_id = user_info_repository.get_user_id(line_user_id)
     if not user_id:
         abort(404)
     return user_id
@@ -273,9 +294,7 @@ def require_user_id_from_line_user_id(line_user_id):
 
 
 def enqueue_immediate_check(user_id, line_user_id):
-    if not settings.cloud_tasks_project_id or not (
-        settings.immediate_check_task_url or DEFAULT_IMMEDIATE_CHECK_TASK_URL
-    ):
+    if not settings.cloud_tasks_project_id:
         raise RuntimeError("Cloud Tasks configuration is incomplete")
 
     client = tasks_v2.CloudTasksClient()
@@ -289,7 +308,7 @@ def enqueue_immediate_check(user_id, line_user_id):
     task = {
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
-            "url": settings.immediate_check_task_url or DEFAULT_IMMEDIATE_CHECK_TASK_URL,
+            "url": IMMEDIATE_CHECK_TASK_URL,
             "headers": {"Content-Type": "application/json"},
             "body": json.dumps(
                 {
@@ -303,6 +322,19 @@ def enqueue_immediate_check(user_id, line_user_id):
         task["http_request"]["headers"]["X-Task-Secret"] = settings.immediate_check_task_secret
 
     client.create_task(parent=parent, task=task)
+
+
+
+def build_registration_summary_payload(user_id):
+    notification_row = notification_setting_repository.get_settings(user_id)
+    return {
+        "notification_enabled": bool(notification_row.get("get_notification")),
+        "last_date": notification_row.get("last_date"),
+        "exception_dates": [dt.isoformat() for dt in exception_date_repository.list_dates(user_id)],
+        "latest_available_dates": decode_compact_datetimes(
+            notification_row.get("last_available_dates") or []
+        ),
+    }
 
 
 

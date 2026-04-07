@@ -19,15 +19,13 @@
 
 ## 主な構成
 - **[main.py](./main.py)**: Flask アプリ。LINE webhook、LIFF ページ、設定用 API、即時確認タスクの入口を持つ。
-- **[scraper.py](./scraper.py)**: 定期実行の runner。通知対象ユーザーを走査して通知処理を呼ぶ。
+- **[scheduled_notifier.py](./scheduled_notifier.py)**: 定期実行の runner。通知対象ユーザーを走査して通知処理を呼ぶ。
 - **[availability_checker.py](./availability_checker.py)**: Hot Pepper 側を巡回して空き枠を取得する。
 - **[availability_notifier.py](./availability_notifier.py)**: 通知本文の組み立て、差分判定、LINE push、last_available_dates 更新を担う。
 - **[repositories.py](./repositories.py)**: Supabase への永続化アクセスをまとめる。
-- **[registration_summary_service.py](./registration_summary_service.py)**: 登録情報確認 API 向けの payload を組み立てる。
 - **[line_templates.py](./line_templates.py)**: LINE の template message をまとめる。
-- **[config.py](./config.py)** / **[clients.py](./clients.py)**: env 読み込みと外部 client 生成をまとめる。
+- **[config.py](./config.py)**: env 読み込みをまとめる。
 - **[templates](./templates)** / **[static](./static)**: LIFF の画面とフロントエンド資産。
-
 
 ## 補足
 - スクレイピング部分を書き換えれば他の予約サイトの監視にも応用できる余地はありますが、現状は自分が通う美容院の予約導線や自分の運用にかなり寄せて作っており、汎用ツールとしては設計していません。
