@@ -29,3 +29,7 @@
 
 ## 補足
 - スクレイピング部分を書き換えれば他の予約サイトの監視にも応用できる余地はありますが、現状は自分が通う美容院の予約導線や自分の運用にかなり寄せて作っており、汎用ツールとしては設計していません。
+
+![チャット画面（通知時）](https://github.com/user-attachments/assets/6efb41c1-5c1d-459c-a90c-3d82ab6445af)
+
+![登録情報画面](https://github.com/user-attachments/assets/fcd7f7b9-cc98-47f6-abfb-275f6c2bd138)
