@@ -229,10 +229,13 @@ class UserInfoRepository(BaseRepository):
                 .execute()
             )
             user_id = response.data[0]["id"]
-        except Exception:
+        except Exception as exc:
             # 同時実行で先に他方が作成した場合は、作成済みの行を取り直して続行する。
             user_id = self.get_user_id(line_user_id)
             if not user_id:
+                print(
+                    f"[user_info:create] line_user_id={line_user_id} user_name={user_name} failed: {exc}"
+                )
                 raise
 
         self.notification_setting_repository.initial_settings(user_id)

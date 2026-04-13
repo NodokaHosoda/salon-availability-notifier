@@ -166,10 +166,15 @@ def task_immediate_check():
 @handler.add(FollowEvent)
 def handle_follow(event):
     line_user_id = event.source.user_id
-    user_info_repository.get_or_create_user(
-        line_user_id,
-        get_line_profile_name_or_none(line_user_id),
-    )
+    try:
+        user_info_repository.get_or_create_user(
+            line_user_id,
+            get_line_profile_name_or_none(line_user_id),
+        )
+    except Exception as exc:
+        print(f"[follow] line_user_id={line_user_id} failed: {exc}")
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        raise
 
 
 def get_line_profile_name_or_none(line_user_id):
@@ -232,7 +237,10 @@ def handle_message(event):
     if not message_handler:
         return
 
-    user_id = require_user_id_from_line_user_id(event.source.user_id)
+    user_id = require_user_id_from_line_user_id(
+        event.source.user_id,
+        source=f"message:{event.message.text}",
+    )
     message_handler(event, user_id)
 
 
@@ -251,7 +259,10 @@ def handle_postback(event):
     if "action" in data_dict:
         action = data_dict["action"][0]
 
-    user_id = require_user_id_from_line_user_id(event.source.user_id)
+    user_id = require_user_id_from_line_user_id(
+        event.source.user_id,
+        source=f"postback:{action}",
+    )
 
     if action == "start":
         reply_msg = build_start_confirmation_message(selected_date)
@@ -280,14 +291,15 @@ def require_user_id_from_request():
     line_user_id = request.headers.get("X-Line-User-Id", "").strip()
     if not line_user_id:
         abort(401)
-    return require_user_id_from_line_user_id(line_user_id)
+    return require_user_id_from_line_user_id(line_user_id, source=f"request:{request.path}")
 
 
 
-def require_user_id_from_line_user_id(line_user_id):
+def require_user_id_from_line_user_id(line_user_id, source="unknown"):
     # 404 への変換をここに寄せて、各 handler 側では業務分岐だけを見る。
     user_id = user_info_repository.get_user_id(line_user_id)
     if not user_id:
+        print(f"[user:not_registered] line_user_id={line_user_id} source={source}")
         abort(404)
     return user_id
 
