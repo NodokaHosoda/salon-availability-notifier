@@ -2,7 +2,6 @@ from datetime import datetime
 from urllib.parse import parse_qs
 import json
 import os
-import traceback
 
 from flask import Flask, abort, jsonify, render_template, request
 from google.cloud import tasks_v2
@@ -30,7 +29,7 @@ from repositories import (
     notification_setting_repository,
     user_info_repository,
 )
-from utils import decode_compact_datetimes
+from utils import decode_compact_datetimes, log_exception_details
 
 settings = get_settings()
 line_bot_api = LineBotApi(settings.line_channel_access_token)
@@ -92,7 +91,7 @@ def api_get_exceptions():
         dates = [dt.isoformat() for dt in exception_date_repository.list_dates(user_id)]
         return jsonify({"dates": dates})
     except Exception as exc:
-        print(f"[api/exceptions:get] user_id={user_id} failed: {exc}")
+        log_exception_details(f"api/exceptions:get user_id={user_id}", exc)
         return jsonify({"error": "除外日一覧の取得に失敗しました。"}), 500
 
 
@@ -105,7 +104,7 @@ def api_add_exceptions():
         saved_count = exception_date_repository.save_dates(user_id, decode_iso_dates(dates))
         return jsonify({"saved_count": saved_count})
     except Exception as exc:
-        print(f"[api/exceptions:add] user_id={user_id} dates={dates} failed: {exc}")
+        log_exception_details(f"api/exceptions:add user_id={user_id} dates={dates}", exc)
         return jsonify({"error": "除外日の追加に失敗しました。"}), 500
 
 
@@ -118,7 +117,7 @@ def api_remove_exceptions():
         removed_count = exception_date_repository.remove_dates(user_id, decode_iso_dates(dates))
         return jsonify({"removed_count": removed_count})
     except Exception as exc:
-        print(f"[api/exceptions:remove] user_id={user_id} dates={dates} failed: {exc}")
+        log_exception_details(f"api/exceptions:remove user_id={user_id} dates={dates}", exc)
         return jsonify({"error": "除外日の解除に失敗しました。"}), 500
 
 
@@ -128,7 +127,7 @@ def api_registration_summary():
     try:
         return jsonify(build_registration_summary_payload(user_id))
     except Exception as exc:
-        print(f"[api/registration-summary] user_id={user_id} failed: {exc}")
+        log_exception_details(f"api/registration-summary user_id={user_id}", exc)
         return jsonify({"error": "登録情報の取得に失敗しました。"}), 500
 
 
@@ -154,7 +153,10 @@ def task_immediate_check():
             compare_with_last=False,
         )
     except Exception as exc:
-        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        log_exception_details(
+            f"tasks/immediate-check user_id={user_id} line_user_id={line_user_id}",
+            exc,
+        )
         line_bot_api.push_message(
             line_user_id,
             TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
@@ -172,8 +174,7 @@ def handle_follow(event):
             get_line_profile_name_or_none(line_user_id),
         )
     except Exception as exc:
-        print(f"[follow] line_user_id={line_user_id} failed: {exc}")
-        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        log_exception_details(f"follow line_user_id={line_user_id}", exc)
         raise
 
 
@@ -217,7 +218,10 @@ def handle_immediate_check_message(event, user_id):
     try:
         enqueue_immediate_check(user_id, event.source.user_id)
     except Exception as exc:
-        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        log_exception_details(
+            f"message:immediate-check user_id={user_id} line_user_id={event.source.user_id}",
+            exc,
+        )
         line_bot_api.push_message(
             event.source.user_id,
             TextSendMessage(text="即時確認の受付に失敗しました。時間をおいてもう一度お試しください。"),

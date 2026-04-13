@@ -1,4 +1,5 @@
 from datetime import datetime
+import traceback
 
 WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
 
@@ -58,3 +59,16 @@ def format_grouped_datetimes_for_display(values, include_bullet=False, as_text=F
     if as_text:
         return "\n".join(lines)
     return lines
+
+
+
+def log_exception_details(context, exc):
+    print(f"[{context}] exception_type={type(exc).__name__}")
+    print(f"[{context}] exception_repr={exc!r}")
+    for attr in ("message", "details", "hint", "code"):
+        value = getattr(exc, attr, None)
+        if value:
+            print(f"[{context}] {attr}={value}")
+    if getattr(exc, "args", None):
+        print(f"[{context}] args={exc.args}")
+    traceback.print_exception(type(exc), exc, exc.__traceback__)

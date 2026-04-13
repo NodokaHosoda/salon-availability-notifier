@@ -7,7 +7,7 @@ from availability_checker import check_availability
 from config import get_settings
 from line_templates import build_availability_message_payload
 from repositories import notification_setting_repository
-from utils import serialize_compact_datetimes
+from utils import log_exception_details, serialize_compact_datetimes
 
 REQUEST_TIMEOUT_SECONDS = 10
 
@@ -35,7 +35,7 @@ def send_line_push_message(line_user_id, user_db_id, message_payload):
             print(response.text)
         return response.ok
     except requests.RequestException as exc:
-        print(f"[line_push] user_id={user_db_id} failed: {exc}")
+        log_exception_details(f"line_push user_id={user_db_id} line_user_id={line_user_id}", exc)
         return False
 
 

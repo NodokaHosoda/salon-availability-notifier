@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from availability_notifier import check_and_send_availability
 from repositories import exception_date_repository, notification_setting_repository
+from utils import log_exception_details
 
 
 
@@ -33,8 +34,9 @@ def run_scheduled_checks():
                 set(exception_date_repository.list_dates(user_db_id)),
             )
         except Exception as exc:
-            print(
-                f"[scheduled_notifier:user_loop] user_id={user_db_id} line_user_id={line_user_id} request_date={request_date} failed: {exc}"
+            log_exception_details(
+                f"scheduled_notifier:user_loop user_id={user_db_id} line_user_id={line_user_id} request_date={request_date}",
+                exc,
             )
 
 
