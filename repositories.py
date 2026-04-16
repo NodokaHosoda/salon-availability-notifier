@@ -250,12 +250,11 @@ class UserInfoRepository(BaseRepository):
             .table("user_info")
             .select("id")
             .eq("line_user_id", line_user_id)
-            .single()
             .execute()
         )
         if not response.data:
             return None
-        return response.data["id"]
+        return response.data[0]["id"]
 
 
 notification_setting_repository = NotificationSettingRepository()
