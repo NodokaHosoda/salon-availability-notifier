@@ -228,6 +228,31 @@ def handle_immediate_check_message(event, user_id):
         )
 
 
+def handle_account_registration_message(event):
+    line_user_id = event.source.user_id
+    user_name = get_line_profile_name_or_none(line_user_id)
+    existing_user_id = user_info_repository.get_user_id(line_user_id)
+
+    try:
+        user_id = user_info_repository.get_or_create_user(line_user_id, user_name)
+    except Exception as exc:
+        log_exception_details(
+            f"message:account-registration line_user_id={line_user_id}",
+            exc,
+        )
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="アカウント登録に失敗しました。時間をおいて再度お試しください。"),
+        )
+        return
+
+    message_text = "アカウント登録は完了済みです。" if existing_user_id else "アカウント登録が完了しました。"
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=message_text),
+    )
+
+
 MESSAGE_HANDLERS = {
     "通知設定": handle_notification_setting_message,
     "日付変更": handle_modify_date_message_command,
@@ -237,6 +262,10 @@ MESSAGE_HANDLERS = {
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
+    if event.message.text == "アカウント登録":
+        handle_account_registration_message(event)
+        return
+
     message_handler = MESSAGE_HANDLERS.get(event.message.text)
     if not message_handler:
         return
