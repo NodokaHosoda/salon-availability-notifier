@@ -158,6 +158,7 @@ def build_availability_message_payload(message, sections=None, total_count=0, ti
     for section in sections:
         item_contents = []
         items = section.get("items") or []
+        stack_items = bool(section.get("stack_items"))
         for index, item in enumerate(items):
             item_contents.append(
                 {
@@ -170,7 +171,7 @@ def build_availability_message_payload(message, sections=None, total_count=0, ti
                     "wrap": True,
                 }
             )
-            if index < len(items) - 1:
+            if not stack_items and index < len(items) - 1:
                 item_contents.append(
                     {
                         "type": "text",
@@ -198,8 +199,8 @@ def build_availability_message_payload(message, sections=None, total_count=0, ti
                     },
                     {
                         "type": "box",
-                        "layout": "baseline",
-                        "spacing": "none",
+                        "layout": "vertical" if stack_items else "baseline",
+                        "spacing": "xs" if stack_items else "none",
                         "contents": item_contents,
                     },
                 ],
@@ -223,6 +224,7 @@ def build_availability_message_payload(message, sections=None, total_count=0, ti
                         "weight": "bold",
                         "size": "xl",
                         "color": "#A7482F",
+                        "wrap": True,
                     },
                     {
                         "type": "text",

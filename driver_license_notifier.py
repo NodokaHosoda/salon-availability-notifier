@@ -13,26 +13,30 @@ def current_jst_date():
 
 def build_driver_license_sections(slots, highlighted_keys=None):
     highlighted = set(highlighted_keys or [])
-    grouped = defaultdict(lambda: defaultdict(list))
+    grouped = defaultdict(list)
     for slot in slots:
-        grouped[slot.place_name][slot.date].append(slot)
+        grouped[slot.date].append(slot)
 
     sections = []
-    for place_name in sorted(grouped):
-        for date_text in sorted(grouped[place_name]):
-            label = datetime.strptime(date_text, "%Y%m%d").strftime("%Y年%m月%d日")
-            sections.append(
-                {
-                    "label": f"{place_name} / {label}",
-                    "items": [
-                        {
-                            "text": f"{slot.display_time}（残り {slot.remaining}）",
-                            "highlighted": slot.compare_key in highlighted,
-                        }
-                        for slot in grouped[place_name][date_text]
-                    ],
-                }
-            )
+    for date_text in sorted(grouped):
+        label = datetime.strptime(date_text, "%Y%m%d").strftime("%Y年%m月%d日")
+        date_slots = sorted(
+            grouped[date_text],
+            key=lambda slot: (slot.place_name, slot.display_time),
+        )
+        sections.append(
+            {
+                "label": label,
+                "stack_items": True,
+                "items": [
+                    {
+                        "text": f"{slot.place_name} / {slot.display_time}（残り {slot.remaining}）",
+                        "highlighted": slot.compare_key in highlighted,
+                    }
+                    for slot in date_slots
+                ],
+            }
+        )
     return sections
 
 
