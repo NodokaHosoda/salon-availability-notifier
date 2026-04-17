@@ -1,2 +1,5 @@
 .env
 .vscode/
+.venv/
+__pycache__/
+.driver_license_scraper_state.json

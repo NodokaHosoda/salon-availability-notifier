@@ -17,6 +17,10 @@ from linebot.models import (
 
 from availability_notifier import check_and_send_availability
 from config import get_settings
+from driver_license_notifier import (
+    check_and_send_driver_license_availability,
+    decode_driver_last_available_date_texts,
+)
 from line_templates import (
     build_modify_confirmation_message,
     build_modify_date_message,
@@ -25,6 +29,7 @@ from line_templates import (
     build_stop_notification_message,
 )
 from repositories import (
+    DRIVER_LICENSE_USER_TYPE,
     exception_date_repository,
     notification_setting_repository,
     user_info_repository,
@@ -143,20 +148,29 @@ def task_immediate_check():
     if not user_id or not line_user_id:
         abort(400)
 
+    request_date = notification_setting_repository.get_last_date(user_id)
+    if not request_date:
+        return ("", 204)
+
     try:
-        # 即時確認は通常の送信経路を使うが、差分がない場合の通知抑止は行わない。
-        check_and_send_availability(
-            notification_setting_repository.get_last_date(user_id),
-            line_user_id,
-            user_id,
-            set(exception_date_repository.list_dates(user_id)),
-            compare_with_last=False,
-        )
+        user_type = user_info_repository.get_user_type_by_id(user_id)
+        if user_type == DRIVER_LICENSE_USER_TYPE:
+            check_and_send_driver_license_availability(
+                request_date,
+                line_user_id,
+                user_id,
+                compare_with_last=False,
+            )
+        else:
+            # 即時確認は通常の送信経路を使うが、差分がない場合の通知抑止は行わない。
+            check_and_send_availability(
+                request_date,
+                line_user_id,
+                user_id,
+                set(exception_date_repository.list_dates(user_id)),
+                compare_with_last=False,
+            )
     except Exception as exc:
-        log_exception_details(
-            f"tasks/immediate-check user_id={user_id} line_user_id={line_user_id}",
-            exc,
-        )
         line_bot_api.push_message(
             line_user_id,
             TextSendMessage(text="即時確認に失敗しました。時間をおいてもう一度お試しください。"),
@@ -168,15 +182,10 @@ def task_immediate_check():
 @handler.add(FollowEvent)
 def handle_follow(event):
     line_user_id = event.source.user_id
-    try:
-        user_info_repository.get_or_create_user(
-            line_user_id,
-            get_line_profile_name_or_none(line_user_id),
-        )
-    except Exception as exc:
-        log_exception_details(f"follow line_user_id={line_user_id}", exc)
-        raise
-
+    user_info_repository.get_or_create_user(
+        line_user_id,
+        get_line_profile_name_or_none(line_user_id),
+    )
 
 def get_line_profile_name_or_none(line_user_id):
     try:
@@ -234,12 +243,8 @@ def handle_account_registration_message(event):
     existing_user_id = user_info_repository.get_user_id(line_user_id)
 
     try:
-        user_id = user_info_repository.get_or_create_user(line_user_id, user_name)
-    except Exception as exc:
-        log_exception_details(
-            f"message:account-registration line_user_id={line_user_id}",
-            exc,
-        )
+        user_info_repository.get_or_create_user(line_user_id, user_name)
+    except Exception:
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text="アカウント登録に失敗しました。時間をおいて再度お試しください。"),
@@ -253,10 +258,28 @@ def handle_account_registration_message(event):
     )
 
 
+def handle_driver_license_mode_message(event, user_id):
+    try:
+        user_info_repository.update_user_type(user_id, DRIVER_LICENSE_USER_TYPE)
+        notification_setting_repository.clear_state(user_id)
+    except Exception as exc:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="運転免許通知への切り替えに失敗しました。時間をおいて再度お試しください。"),
+        )
+        return
+
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text="運転免許通知モードに切り替えました。通知設定から期限日を設定してください。"),
+    )
+
+
 MESSAGE_HANDLERS = {
     "通知設定": handle_notification_setting_message,
     "日付変更": handle_modify_date_message_command,
     "即時確認": handle_immediate_check_message,
+    "運転免許": handle_driver_license_mode_message,
 }
 
 
@@ -372,13 +395,23 @@ def enqueue_immediate_check(user_id, line_user_id):
 
 def build_registration_summary_payload(user_id):
     notification_row = notification_setting_repository.get_settings(user_id)
+    user_type = user_info_repository.get_user_type_by_id(user_id)
+
+    if user_type == DRIVER_LICENSE_USER_TYPE:
+        latest_available_dates = decode_driver_last_available_date_texts(
+            notification_row.get("driver_last_available_dates") or []
+        )
+    else:
+        latest_available_dates = decode_compact_datetimes(
+            notification_row.get("last_available_dates") or []
+        )
+
     return {
         "notification_enabled": bool(notification_row.get("get_notification")),
+        "notification_type": user_type,
         "last_date": notification_row.get("last_date"),
         "exception_dates": [dt.isoformat() for dt in exception_date_repository.list_dates(user_id)],
-        "latest_available_dates": decode_compact_datetimes(
-            notification_row.get("last_available_dates") or []
-        ),
+        "latest_available_dates": latest_available_dates,
     }
 
 

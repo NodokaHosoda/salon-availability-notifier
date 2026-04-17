@@ -22,7 +22,6 @@ def build_set_notification_date_message():
     )
 
 
-
 def build_modify_date_message(current_date=None):
     template = {
         "type": "buttons",
@@ -50,7 +49,6 @@ def build_modify_date_message(current_date=None):
     )
 
 
-
 def build_stop_notification_message():
     return TemplateSendMessage(
         alt_text="通知を停止しますか？",
@@ -73,7 +71,6 @@ def build_stop_notification_message():
             ],
         },
     )
-
 
 
 def build_modify_confirmation_message(selected_date):
@@ -100,7 +97,6 @@ def build_modify_confirmation_message(selected_date):
     )
 
 
-
 def build_start_confirmation_message(selected_date):
     return TemplateSendMessage(
         alt_text=f"{selected_date} までの空き情報の通知を開始しますか？",
@@ -125,39 +121,57 @@ def build_start_confirmation_message(selected_date):
     )
 
 
-def build_availability_message_payload(message, available_dates=None, new_available_dates=None):
-    if not available_dates:
-        return {"type": "text", "text": message}
-
-    # 新しく増えた枠だけ強調しつつ、カード自体には現在見えている候補全体を載せる。
-    highlighted_dates = set(new_available_dates or [])
+def build_salon_availability_sections(available_dates, highlighted_dates=None):
+    highlighted = set(highlighted_dates or [])
     grouped_dates = {}
     for dt_obj in sorted(available_dates):
         date_label = format_date_only_for_display(dt_obj)
         grouped_dates.setdefault(date_label, []).append(
             {
-                "compact": dt_obj.strftime("%Y%m%d%H%M"),
-                "time": format_time_for_display(dt_obj),
+                "key": dt_obj.strftime("%Y%m%d%H%M"),
+                "text": format_time_for_display(dt_obj),
             }
         )
 
     sections = []
     for date_label, items in grouped_dates.items():
-        time_contents = []
+        sections.append(
+            {
+                "label": date_label,
+                "items": [
+                    {
+                        "text": item["text"],
+                        "highlighted": item["key"] in highlighted,
+                    }
+                    for item in items
+                ],
+            }
+        )
+    return sections
+
+
+def build_availability_message_payload(message, sections=None, total_count=0, title="空きがあります"):
+    if not sections:
+        return {"type": "text", "text": message}
+
+    rendered_sections = []
+    for section in sections:
+        item_contents = []
+        items = section.get("items") or []
         for index, item in enumerate(items):
-            is_new = item["compact"] in highlighted_dates
-            time_contents.append(
+            item_contents.append(
                 {
                     "type": "text",
-                    "text": item["time"],
+                    "text": item["text"],
                     "size": "sm",
-                    "weight": "bold" if is_new else "regular",
-                    "color": "#A7482F" if is_new else "#6B655D",
+                    "weight": "bold" if item.get("highlighted") else "regular",
+                    "color": "#A7482F" if item.get("highlighted") else "#6B655D",
                     "flex": 0,
+                    "wrap": True,
                 }
             )
             if index < len(items) - 1:
-                time_contents.append(
+                item_contents.append(
                     {
                         "type": "text",
                         "text": "  ",
@@ -167,7 +181,7 @@ def build_availability_message_payload(message, available_dates=None, new_availa
                     }
                 )
 
-        sections.append(
+        rendered_sections.append(
             {
                 "type": "box",
                 "layout": "vertical",
@@ -176,7 +190,7 @@ def build_availability_message_payload(message, available_dates=None, new_availa
                 "contents": [
                     {
                         "type": "text",
-                        "text": date_label,
+                        "text": section["label"],
                         "weight": "bold",
                         "size": "sm",
                         "wrap": True,
@@ -186,7 +200,7 @@ def build_availability_message_payload(message, available_dates=None, new_availa
                         "type": "box",
                         "layout": "baseline",
                         "spacing": "none",
-                        "contents": time_contents,
+                        "contents": item_contents,
                     },
                 ],
             }
@@ -205,14 +219,14 @@ def build_availability_message_payload(message, available_dates=None, new_availa
                 "contents": [
                     {
                         "type": "text",
-                        "text": "空きがあります",
+                        "text": title,
                         "weight": "bold",
                         "size": "xl",
                         "color": "#A7482F",
                     },
                     {
                         "type": "text",
-                        "text": f"{len(available_dates)}件の候補が見つかりました。",
+                        "text": f"{total_count}件の候補が見つかりました。",
                         "size": "sm",
                         "wrap": True,
                         "color": "#6B655D",
@@ -225,7 +239,7 @@ def build_availability_message_payload(message, available_dates=None, new_availa
                         "type": "box",
                         "layout": "vertical",
                         "spacing": "sm",
-                        "contents": sections,
+                        "contents": rendered_sections,
                     },
                 ],
             },

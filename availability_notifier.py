@@ -5,7 +5,7 @@ import requests
 
 from availability_checker import check_availability
 from config import get_settings
-from line_templates import build_availability_message_payload
+from line_templates import build_availability_message_payload, build_salon_availability_sections
 from repositories import notification_setting_repository
 from utils import log_exception_details, serialize_compact_datetimes
 
@@ -28,19 +28,19 @@ def send_line_push_message(line_user_id, user_db_id, message_payload):
             data=json.dumps(body),
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
-        print(f"[line_push] user_id={user_db_id} status={response.status_code}")
-        try:
-            print(response.json())
-        except ValueError:
-            print(response.text)
-        return response.ok
-    except requests.RequestException as exc:
-        log_exception_details(f"line_push user_id={user_db_id} line_user_id={line_user_id}", exc)
+    except Exception as exc:
         return False
 
+    return response.ok
 
 
-def check_and_send_availability(request_date, line_user_id, user_db_id, exception_dates=None, compare_with_last=True):
+def check_and_send_availability(
+    request_date,
+    line_user_id,
+    user_db_id,
+    exception_dates=None,
+    compare_with_last=True,
+):
     exception_set = exception_dates or set()
     check_result = asyncio.run(check_availability(request_date, exception_set))
 
@@ -59,10 +59,14 @@ def check_and_send_availability(request_date, line_user_id, user_db_id, exceptio
             )
             return
 
+    sections = build_salon_availability_sections(
+        check_result.visible_dates,
+        highlighted_dates=new_available_dates,
+    )
     message_payload = build_availability_message_payload(
         check_result.message,
-        check_result.visible_dates,
-        new_available_dates,
+        sections=sections,
+        total_count=len(check_result.visible_dates),
     )
     if not send_line_push_message(line_user_id, user_db_id, message_payload):
         return
