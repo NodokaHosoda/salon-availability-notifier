@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from availability_notifier import check_and_send_availability
-from repositories import exception_date_repository, notification_setting_repository
+from repositories import SALON_USER_TYPE, exception_date_repository, notification_setting_repository
 from utils import log_exception_details
 
 
@@ -13,7 +13,8 @@ def is_request_date_expired(request_date):
 
 
 def run_scheduled_checks():
-    for target in notification_setting_repository.list_enabled_targets():
+    failed_user_ids = []
+    for target in notification_setting_repository.list_enabled_targets(SALON_USER_TYPE):
         request_date = target["last_date"]
         if not request_date:
             continue
@@ -35,9 +36,15 @@ def run_scheduled_checks():
             )
         except Exception as exc:
             log_exception_details(
-                f"scheduled_notifier:user_loop user_id={user_db_id} line_user_id={line_user_id} request_date={request_date}",
+                f"scheduled_notifier:user_loop user_id={user_db_id} request_date={request_date}",
                 exc,
             )
+            failed_user_ids.append(str(user_db_id))
+
+    if failed_user_ids:
+        raise RuntimeError(
+            "scheduled_notifier failed for user_ids=" + ",".join(failed_user_ids)
+        )
 
 
 if __name__ == "__main__":

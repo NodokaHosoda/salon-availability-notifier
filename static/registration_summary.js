@@ -58,7 +58,9 @@
 
   function renderMeta(payload) {
     metaEl.innerHTML = "";
+    const typeLabel = payload.notification_type === "driverlicense" ? "運転免許" : "美容院";
     const items = [
+      ["通知種別", typeLabel],
       ["通知状態", payload.notification_enabled ? "ON" : "OFF"],
       ["通知期限日", payload.last_date || "未設定"],
     ];
@@ -101,6 +103,29 @@
     });
   }
 
+  function renderSimpleList(targetEl, values, emptyText) {
+    targetEl.innerHTML = "";
+    if (!values || values.length === 0) {
+      const emptyEl = document.createElement("p");
+      emptyEl.className = "summary-empty";
+      emptyEl.textContent = emptyText;
+      targetEl.appendChild(emptyEl);
+      return;
+    }
+
+    values.forEach((value) => {
+      const row = document.createElement("div");
+      row.className = "summary-row";
+
+      const textEl = document.createElement("p");
+      textEl.className = "summary-times";
+      textEl.textContent = value;
+
+      row.appendChild(textEl);
+      targetEl.appendChild(row);
+    });
+  }
+
   async function loadSummary(userId) {
     const response = await fetch("/api/registration-summary", {
       headers: {
@@ -122,7 +147,11 @@
     const payload = await loadSummary(userId);
     renderMeta(payload);
     renderGroupedList(exceptionDatesEl, payload.exception_dates, "登録済みの除外日時はありません。");
-    renderGroupedList(latestAvailableDatesEl, payload.latest_available_dates, "空きはありません。");
+    if (payload.notification_type === "driverlicense") {
+      renderSimpleList(latestAvailableDatesEl, payload.latest_available_dates, "空きはありません。");
+    } else {
+      renderGroupedList(latestAvailableDatesEl, payload.latest_available_dates, "空きはありません。");
+    }
     setStatus("");
     showSummary(true);
   } catch (error) {
