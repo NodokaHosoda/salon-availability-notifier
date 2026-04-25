@@ -2,7 +2,8 @@ name: Driver License Availability Run
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    # 5分おきに24時間実行（夜間も継続）
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
